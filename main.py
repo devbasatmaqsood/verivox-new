@@ -157,8 +157,8 @@ def main(args: argparse.Namespace) -> None:
     if n_swa_update > 0:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
-    produce_evaluation_file(eval_loader, model, device, eval_score_path,
-                            test_trial_path)
+    produce_evaluation_file(eval_loader, model, device, eval_score_path, test_trial_path)
+    eval_eer = calculate_EER(cm_scores_file=eval_score_path, output_file=model_tag / "EER.txt")
 
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
