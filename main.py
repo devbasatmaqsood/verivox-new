@@ -53,8 +53,8 @@ def main(args: argparse.Namespace) -> None:
     # define database related paths
     output_dir = Path(args.output_dir)
     database_path = Path(config["database_path"])
-    val_trial_path = "../id-asvspoofing/dataset/IDASVspoofing.cm.val"
-    test_trial_path = "../id-asvspoofing/dataset/IDASVspoofing.cm.test"
+    val_trial_path = "../id-asvspoofing/dataset/IDASVspoofing.cm.val.txt"
+    test_trial_path = "../id-asvspoofing/dataset/IDASVspoofing.cm.test.txt"
 
     # define model related paths
     model_tag = "{}_{}_ep{}_bs{}".format(
