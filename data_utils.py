@@ -4,9 +4,6 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-___author__ = "Hemlata Tak, Jee-weon Jung"
-__email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
-
 
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
 
@@ -59,10 +56,10 @@ def pad_random(x: np.ndarray, max_len: int = 64600):
     return padded_x
 
 
-class Dataset_ASVspoof2019_train(Dataset):
+class Dataset_IDASVspoofing_train(Dataset):
     def __init__(self, list_IDs, labels, base_dir):
         """self.list_IDs	: list of strings (each string: utt key),
-           self.labels      : dictionary (key: utt key, value: label integer)"""
+            self.labels      : dictionary (key: utt key, value: label integer)"""
         self.list_IDs = list_IDs
         self.labels = labels
         self.base_dir = base_dir
@@ -80,7 +77,7 @@ class Dataset_ASVspoof2019_train(Dataset):
         return x_inp, y
 
 
-class Dataset_ASVspoof2019_devNeval(Dataset):
+class Dataset_IDASVspoofing_val(Dataset):
     def __init__(self, list_IDs, base_dir):
         """self.list_IDs	: list of strings (each string: utt key),
         """

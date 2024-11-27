@@ -332,16 +332,16 @@ class CONV(nn.Module):
         return 700 * (10**(mel / 2595) - 1)
 
     def __init__(self,
-                 out_channels,
-                 kernel_size,
-                 sample_rate=16000,
-                 in_channels=1,
-                 stride=1,
-                 padding=0,
-                 dilation=1,
-                 bias=False,
-                 groups=1,
-                 mask=False):
+                    out_channels,
+                    kernel_size,
+                    sample_rate=16000,
+                    in_channels=1,
+                    stride=1,
+                    padding=0,
+                    dilation=1,
+                    bias=False,
+                    groups=1,
+                    mask=False):
         super().__init__()
         if in_channels != 1:
 
@@ -374,7 +374,7 @@ class CONV(nn.Module):
 
         self.mel = filbandwidthsf
         self.hsupp = torch.arange(-(self.kernel_size - 1) / 2,
-                                  (self.kernel_size - 1) / 2 + 1)
+                                    (self.kernel_size - 1) / 2 + 1)
         self.band_pass = torch.zeros(self.out_channels, self.kernel_size)
         for i in range(len(self.mel) - 1):
             fmin = self.mel[i]
@@ -399,7 +399,7 @@ class CONV(nn.Module):
             band_pass_filter = band_pass_filter
 
         self.filters = (band_pass_filter).view(self.out_channels, 1,
-                                               self.kernel_size)
+                                                self.kernel_size)
 
         return F.conv1d(x,
                         self.filters,
@@ -418,26 +418,26 @@ class Residual_block(nn.Module):
         if not self.first:
             self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
         self.conv1 = nn.Conv2d(in_channels=nb_filts[0],
-                               out_channels=nb_filts[1],
-                               kernel_size=(2, 3),
-                               padding=(1, 1),
-                               stride=1)
+                                out_channels=nb_filts[1],
+                                kernel_size=(2, 3),
+                                padding=(1, 1),
+                                stride=1)
         self.selu = nn.SELU(inplace=True)
 
         self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1])
         self.conv2 = nn.Conv2d(in_channels=nb_filts[1],
-                               out_channels=nb_filts[1],
-                               kernel_size=(2, 3),
-                               padding=(0, 1),
-                               stride=1)
+                                out_channels=nb_filts[1],
+                                kernel_size=(2, 3),
+                                padding=(0, 1),
+                                stride=1)
 
         if nb_filts[0] != nb_filts[1]:
             self.downsample = True
             self.conv_downsample = nn.Conv2d(in_channels=nb_filts[0],
-                                             out_channels=nb_filts[1],
-                                             padding=(0, 1),
-                                             kernel_size=(1, 3),
-                                             stride=1)
+                                                out_channels=nb_filts[1],
+                                                padding=(0, 1),
+                                                kernel_size=(1, 3),
+                                                stride=1)
 
         else:
             self.downsample = False
@@ -477,8 +477,8 @@ class Model(nn.Module):
         temperatures = d_args["temperatures"]
 
         self.conv_time = CONV(out_channels=filts[0],
-                              kernel_size=d_args["first_conv"],
-                              in_channels=1)
+                                kernel_size=d_args["first_conv"],
+                                in_channels=1)
         self.first_bn = nn.BatchNorm2d(num_features=1)
 
         self.drop = nn.Dropout(0.5, inplace=True)
@@ -498,11 +498,11 @@ class Model(nn.Module):
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
 
         self.GAT_layer_S = GraphAttentionLayer(filts[-1][-1],
-                                               gat_dims[0],
-                                               temperature=temperatures[0])
+                                                gat_dims[0],
+                                                temperature=temperatures[0])
         self.GAT_layer_T = GraphAttentionLayer(filts[-1][-1],
-                                               gat_dims[0],
-                                               temperature=temperatures[1])
+                                                gat_dims[0],
+                                                temperature=temperatures[1])
 
         self.HtrgGAT_layer_ST11 = HtrgGraphAttentionLayer(
             gat_dims[0], gat_dims[1], temperature=temperatures[2])

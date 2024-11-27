@@ -8,9 +8,6 @@ import numpy as np
 from torch.utils import data
 from torch.nn.parameter import Parameter
 
-___author__ = "Hemlata Tak"
-__email__ = "tak@eurecom.fr"
-
 
 class SincConv(nn.Module):
     @staticmethod
@@ -71,7 +68,7 @@ class SincConv(nn.Module):
         filbandwidthsf = self.to_hz(filbandwidthsmel)  # Mel to Hz conversion
         self.mel = filbandwidthsf
         self.hsupp = torch.arange(-(self.kernel_size - 1) / 2,
-                                  (self.kernel_size - 1) / 2 + 1)
+                                    (self.kernel_size - 1) / 2 + 1)
         self.band_pass = torch.zeros(self.out_channels, self.kernel_size)
 
     def forward(self, x):
@@ -90,7 +87,7 @@ class SincConv(nn.Module):
         band_pass_filter = self.band_pass.to(x.device)
 
         self.filters = (band_pass_filter).view(self.out_channels, 1,
-                                               self.kernel_size)
+                                                self.kernel_size)
 
         return F.conv1d(
             x,
@@ -224,7 +221,7 @@ class Model(nn.Module):
         )
 
         self.fc1_gru = nn.Linear(in_features=d_args["gru_node"],
-                                 out_features=d_args["nb_fc_node"])
+                                    out_features=d_args["nb_fc_node"])
 
         self.fc2_gru = nn.Linear(
             in_features=d_args["nb_fc_node"],
@@ -247,51 +244,39 @@ class Model(nn.Module):
         x = self.selu(x)
 
         x0 = self.block0(x)
-        y0 = self.avgpool(x0).view(x0.size(0),
-                                   -1)  # torch.Size([batch, filter])
+        y0 = self.avgpool(x0).view(x0.size(0), 1)  # torch.Size([batch, filter])
         y0 = self.fc_attention0(y0)
-        y0 = self.sig(y0).view(y0.size(0), y0.size(1),
-                               -1)  # torch.Size([batch, filter, 1])
+        y0 = self.sig(y0).view(y0.size(0), y0.size(1), -1)  # torch.Size([batch, filter, 1])
         x = x0 * y0 + y0  # (batch, filter, time) x (batch, filter, 1)
 
         x1 = self.block1(x)
-        y1 = self.avgpool(x1).view(x1.size(0),
-                                   -1)  # torch.Size([batch, filter])
+        y1 = self.avgpool(x1).view(x1.size(0), -1)  # torch.Size([batch, filter])
         y1 = self.fc_attention1(y1)
-        y1 = self.sig(y1).view(y1.size(0), y1.size(1),
-                               -1)  # torch.Size([batch, filter, 1])
+        y1 = self.sig(y1).view(y1.size(0), y1.size(1), -1)  # torch.Size([batch, filter, 1])
         x = x1 * y1 + y1  # (batch, filter, time) x (batch, filter, 1)
 
         x2 = self.block2(x)
-        y2 = self.avgpool(x2).view(x2.size(0),
-                                   -1)  # torch.Size([batch, filter])
+        y2 = self.avgpool(x2).view(x2.size(0), -1)  # torch.Size([batch, filter])
         y2 = self.fc_attention2(y2)
-        y2 = self.sig(y2).view(y2.size(0), y2.size(1),
-                               -1)  # torch.Size([batch, filter, 1])
+        y2 = self.sig(y2).view(y2.size(0), y2.size(1), -1)  # torch.Size([batch, filter, 1])
         x = x2 * y2 + y2  # (batch, filter, time) x (batch, filter, 1)
 
         x3 = self.block3(x)
-        y3 = self.avgpool(x3).view(x3.size(0),
-                                   -1)  # torch.Size([batch, filter])
+        y3 = self.avgpool(x3).view(x3.size(0), -1)  # torch.Size([batch, filter])
         y3 = self.fc_attention3(y3)
-        y3 = self.sig(y3).view(y3.size(0), y3.size(1),
-                               -1)  # torch.Size([batch, filter, 1])
+        y3 = self.sig(y3).view(y3.size(0), y3.size(1), -1)  # torch.Size([batch, filter, 1])
         x = x3 * y3 + y3  # (batch, filter, time) x (batch, filter, 1)
 
         x4 = self.block4(x)
-        y4 = self.avgpool(x4).view(x4.size(0),
-                                   -1)  # torch.Size([batch, filter])
+        y4 = self.avgpool(x4).view(x4.size(0), -1)  # torch.Size([batch, filter])
         y4 = self.fc_attention4(y4)
-        y4 = self.sig(y4).view(y4.size(0), y4.size(1),
-                               -1)  # torch.Size([batch, filter, 1])
+        y4 = self.sig(y4).view(y4.size(0), y4.size(1), -1)  # torch.Size([batch, filter, 1])
         x = x4 * y4 + y4  # (batch, filter, time) x (batch, filter, 1)
 
         x5 = self.block5(x)
-        y5 = self.avgpool(x5).view(x5.size(0),
-                                   -1)  # torch.Size([batch, filter])
+        y5 = self.avgpool(x5).view(x5.size(0), -1)  # torch.Size([batch, filter])
         y5 = self.fc_attention5(y5)
-        y5 = self.sig(y5).view(y5.size(0), y5.size(1),
-                               -1)  # torch.Size([batch, filter, 1])
+        y5 = self.sig(y5).view(y5.size(0), y5.size(1), -1)  # torch.Size([batch, filter, 1])
         x = x5 * y5 + y5  # (batch, filter, time) x (batch, filter, 1)
 
         x = self.bn_before_gru(x)
