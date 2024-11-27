@@ -188,9 +188,9 @@ def get_model(model_config: Dict, device: torch.device):
 def get_loader(database_path: str, seed: int, config: dict) -> List[torch.utils.data.DataLoader]:
     """Make PyTorch DataLoaders for train / developement / evaluation"""
     
-    trn_database_path = database_path / "/content/drive/MyDrive/dataset-IDASVspoofing/IDASVspoofing_train/content/content/IDASVspoofing_train"
-    dev_database_path = database_path / "/content/drive/MyDrive/dataset-IDASVspoofing/IDASVspoofing_val/content/content/IDASVspoofing_val"
-    eval_database_path = database_path / "/content/drive/MyDrive/dataset-IDASVspoofing/IDASVspoofing_test/content/content/IDASVspoofing_test"
+    trn_database_path = database_path / "drive/MyDrive/dataset-IDASVspoofing/IDASVspoofing_train/content/content/IDASVspoofing_train"
+    dev_database_path = database_path / "drive/MyDrive/dataset-IDASVspoofing/IDASVspoofing_val/content/content/IDASVspoofing_val"
+    eval_database_path = database_path / "drive/MyDrive/dataset-IDASVspoofing/IDASVspoofing_test/content/content/IDASVspoofing_test"
 
     trn_list_path = "../id-asvspoofing/dataset/IDASVspoofing.cm.train.txt"
     val_trial_path = "../id-asvspoofing/dataset/IDASVspoofing.cm.val.txt"
