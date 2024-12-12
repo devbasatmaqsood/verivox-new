@@ -49,8 +49,8 @@ def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     database_path = Path(config["database_path"])
     
-    val_trial_path = (database_path / "IDASVspoofing.cm.val.joined.txt")
-    test_trial_path = (database_path / "IDASVspoofing.cm.test.joined.txt")
+    val_trial_path = (database_path / "IDASVspoofing.cm.val.joined.shuffle.txt")
+    test_trial_path = (database_path / "IDASVspoofing.cm.test.joined.shuffle.txt")
     
     # Define model related paths
     model_tag = "{}_{}_ep{}_bs{}".format(
@@ -212,9 +212,9 @@ def get_loader(database_path: str, seed: int,config: dict) -> List[torch.utils.d
     val_database_path = database_path / "IDASVspoofing_val_joined/"
     test_database_path = database_path / "IDASVspoofing_test_joined/"
     
-    train_list_path = database_path / "IDASVspoofing.cm.train.joined.txt"
-    val_trial_path = database_path / "IDASVspoofing.cm.val.joined.txt"
-    test_trial_path = database_path / "IDASVspoofing.cm.test.joined.txt"
+    train_list_path = database_path / "IDASVspoofing.cm.train.joined.shuffle.txt"
+    val_trial_path = database_path / "IDASVspoofing.cm.val.joined.shuffle.txt"
+    test_trial_path = database_path / "IDASVspoofing.cm.test.joined.shuffle.txt"
     
     d_label_train, file_train = genSpoof_list(
         dir_meta=train_list_path, 
