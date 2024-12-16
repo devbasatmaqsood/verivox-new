@@ -14,4 +14,5 @@ We take deep inspiration and would like to shoutout the following links that hel
 - [The AASIST paper](https://arxiv.org/abs/2110.01200) as the main paper for the modeling phase and data understanding.
 - [The ASVspoofing2019 paper](https://arxiv.org/abs/1911.01601) for even deeper data understanding.
 
-Additional information as well that our inferencing is done in a notebook we've kept in `notebooks/spoofing-eval-inference.ipynb`.
+## Inference & Dataset
+After we train our models from scratch, we take their inference in the `notebooks/spoofing-eval-inference.ipynb` notebook. The checkpoints as well as our training, validation, and testing dataset is kept in this [Google Drive](https://tinyurl.com/24l5da5z).
