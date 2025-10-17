@@ -458,6 +458,7 @@ class CBAM(nn.Module):
 class Residual_block(nn.Module):
     def __init__(self, nb_filts, first=False, attention_module=None):
         super().__init__()
+        self.first = first
         self.attention_module = attention_module
 
         if not self.first:
