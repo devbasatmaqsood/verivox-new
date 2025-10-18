@@ -2,7 +2,7 @@
 Main script that trains, validates, and evaluates
 various models including AASIST.
 
-AASIST
+AASIST_Lable Smooting&Focal Loss implementation
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
