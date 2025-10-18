@@ -2,7 +2,7 @@
 Main script that trains, validates, and evaluates
 various models including AASIST.
 
-AASIST_Lable Smooting&Focal Loss implementation
+AASIST
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
@@ -18,7 +18,6 @@ from typing import Dict, List, Union
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchcontrib.optim import SWA
@@ -27,30 +26,6 @@ from data_utils import (Dataset_ASVspoof2019_train,
                         Dataset_ASVspoof2019_devNeval, genSpoof_list)
 from evaluation import calculate_tDCF_EER
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
-
-
-class FocalLoss(nn.Module):
-    """
-    Focal Loss, as described in https://arxiv.org/abs/1708.02002.
-    It modifies standard cross-entropy loss to focus correcting misclassified examples.
-    """
-    def __init__(self, weight=None, gamma=2., reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.weight = weight
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none', weight=self.weight)
-        pt = torch.exp(-ce_loss)
-        focal_loss = ((1 - pt) ** self.gamma * ce_loss)
-        
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -356,23 +331,9 @@ def train_epoch(
     ii = 0
     model.train()
 
-    # Get loss and label smoothing configurations
-    loss_name = config.get("loss", "CCE")
-    label_smoothing = config.get("label_smoothing_epsilon", 0.0)
-    focal_gamma = config.get("focal_loss_gamma", 2.0)
-
-    # Set objective (Loss) functions
+    # set objective (Loss) functions
     weight = torch.FloatTensor([0.1, 0.9]).to(device)
-    
-    if loss_name == "FocalLoss":
-        criterion = FocalLoss(weight=weight, gamma=focal_gamma)
-    elif label_smoothing > 0:
-        # Use KL divergence for label smoothing with Cross-Entropy
-        criterion = nn.KLDivLoss(reduction='batchmean')
-    else:
-        # Standard Cross-Entropy
-        criterion = nn.CrossEntropyLoss(weight=weight)
-        
+    criterion = nn.CrossEntropyLoss(weight=weight)
     for batch_x, batch_y in trn_loader:
         batch_size = batch_x.size(0)
         num_total += batch_size
@@ -380,22 +341,7 @@ def train_epoch(
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
         _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
-
-        # Apply label smoothing if configured and using a compatible loss
-        if label_smoothing > 0 and loss_name == "CCE":
-            # Create smooth labels
-            num_classes = batch_out.size(1)
-            smooth_labels = torch.full(size=(batch_size, num_classes), 
-                                       fill_value=label_smoothing / (num_classes - 1)).to(device)
-            smooth_labels.scatter_(1, batch_y.unsqueeze(1), 1.0 - label_smoothing)
-            
-            # Use log-softmax for KLDivLoss
-            batch_out = F.log_softmax(batch_out, dim=1)
-            batch_loss = criterion(batch_out, smooth_labels)
-        else:
-            # Standard loss calculation for Focal Loss or regular CCE
-            batch_loss = criterion(batch_out, batch_y)
-
+        batch_loss = criterion(batch_out, batch_y)
         running_loss += batch_loss.item() * batch_size
         optim.zero_grad()
         batch_loss.backward()

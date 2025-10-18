@@ -414,10 +414,6 @@ class Residual_block(nn.Module):
     def __init__(self, nb_filts, first=False):
         super().__init__()
         self.first = first
-<<<<<<< HEAD
-=======
-        self.attention_module = attention_module
->>>>>>> 28d64e779310b55899efda7973b2b9f3c22db39a
 
         if not self.first:
             self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
@@ -609,7 +605,3 @@ class Model(nn.Module):
         output = self.out_layer(last_hidden)
 
         return last_hidden, output
-<<<<<<< HEAD
-=======
-    
->>>>>>> 28d64e779310b55899efda7973b2b9f3c22db39a
