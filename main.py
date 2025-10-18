@@ -2,7 +2,7 @@
 Main script that trains, validates, and evaluates
 various models including AASIST.
 
-AASIST
+AASIST Lable smoothing and Focal Loss implementation
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
@@ -18,6 +18,7 @@ from typing import Dict, List, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchcontrib.optim import SWA
