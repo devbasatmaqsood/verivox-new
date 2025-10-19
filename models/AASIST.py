@@ -85,40 +85,57 @@ class GraphAttentionLayer(nn.Module):
         out_shape   :(#bs, #node, #node, #num_heads)
         '''
         batch_size, num_nodes, _ = x.shape
-        att_features = self._pairwise_mul_nodes(x)
-        
-        # size: (#bs, #node, #node, #dim_out)
-        att_features = torch.tanh(self.att_proj(att_features))
-        
-        # Reshape for multi-head
-        att_features = att_features.view(batch_size, num_nodes, num_nodes,
-                                         self.num_heads, self.head_dim)
-        
-        # size: (#bs, #node, #node, #num_heads)
-        att_map = torch.einsum('b n h i, h i o -> b n h o', att_features, self.att_weight).squeeze(-1)
+        att_features = self._pairwise_mul_nodes(x)  # (B, N, N, dim)
 
-        # apply temperature
+    # size: (#bs, #node, #node, #dim_out)
+        att_features = torch.tanh(self.att_proj(att_features))
+
+    # Reshape for multi-head
+    # att_features shape -> (B, N, N, H, head_dim)
+        att_features = att_features.view(batch_size, num_nodes, num_nodes,
+                                     self.num_heads, self.head_dim)
+
+    # att_weight shape -> (H, head_dim, O). For this model O == 1.
+    # Correct einsum for 5D input:
+    # Input:  att_features (b n m h i)
+    # Weight: att_weight   (h i o)
+    # Output: (b n m h o)
+        att_map = torch.einsum('b n m h i, h i o -> b n m h o',
+                          att_features, self.att_weight)
+
+    # if output last dim is 1 (o==1), squeeze it to get (b, n, m, h)
+        if att_map.size(-1) == 1:
+            att_map = att_map.squeeze(-1)  # -> (B, N, N, H)
+
+    # apply temperature
         att_map = att_map / self.temp
-        att_map = F.softmax(att_map, dim=-2)
+
+    # softmax along source node dimension (the middle N)
+        att_map = F.softmax(att_map, dim=2)  # dim=2 corresponds to the 'm' axis
 
         return att_map
 
+
     def _project(self, x, att_map):
         batch_size, num_nodes, _ = x.shape
-        
-        # Project for values
+
+    # Project for values: (B, N, out_dim) -> (B, N, H, head_dim)
         value = self.proj_with_att(x)  # (bs, N, out_dim)
         value = value.view(batch_size, num_nodes, self.num_heads,
-                           self.head_dim)
-        
-        # Aggregate using attention map
-        agg_value = torch.einsum('bnnh,bnhd->bnhd', att_map, value)
-        agg_value = agg_value.contiguous().view(batch_size, num_nodes,
-                                                self.out_dim)
+                       self.head_dim)  # (B, N, H, D)
+
+    # att_map is (B, N, M, H)   where M == N (the source nodes)
+    # value is   (B, M, H, D)   (we need to contract over M)
+    # Correct einsum: 'b n m h, b m h d -> b n h d' (contract over m)
+        agg_value = torch.einsum('b n m h, b m h d -> b n h d', att_map, value)
+
+    # flatten heads back to out_dim
+        agg_value = agg_value.contiguous().view(batch_size, num_nodes, self.out_dim)
 
         x_res = self.proj_without_att(x)
 
         return agg_value + x_res
+
 
     def _apply_BN(self, x):
         org_size = x.size()
