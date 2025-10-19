@@ -18,9 +18,16 @@ class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
+        self.num_heads = kwargs.get("num_heads", 1)
+        if out_dim % self.num_heads != 0:
+            raise ValueError("out_dim must be divisible by num_heads")
+        self.head_dim = out_dim // self.num_heads
+        self.out_dim = out_dim
+
         # attention map
         self.att_proj = nn.Linear(in_dim, out_dim)
-        self.att_weight = self._init_new_params(out_dim, 1)
+        self.att_weight = self._init_new_params(self.num_heads, self.head_dim,
+                                                1)
 
         # project
         self.proj_with_att = nn.Linear(in_dim, out_dim)
@@ -75,26 +82,44 @@ class GraphAttentionLayer(nn.Module):
     def _derive_att_map(self, x):
         '''
         x           :(#bs, #node, #dim)
-        out_shape   :(#bs, #node, #node, 1)
+        out_shape   :(#bs, #node, #node, #num_heads)
         '''
-        att_map = self._pairwise_mul_nodes(x)
+        batch_size, num_nodes, _ = x.shape
+        att_features = self._pairwise_mul_nodes(x)
+        
         # size: (#bs, #node, #node, #dim_out)
-        att_map = torch.tanh(self.att_proj(att_map))
-        # size: (#bs, #node, #node, 1)
-        att_map = torch.matmul(att_map, self.att_weight)
+        att_features = torch.tanh(self.att_proj(att_features))
+        
+        # Reshape for multi-head
+        att_features = att_features.view(batch_size, num_nodes, num_nodes,
+                                         self.num_heads, self.head_dim)
+        
+        # size: (#bs, #node, #node, #num_heads)
+        att_map = torch.einsum('b n n h i,h i o->b n n h', att_features,
+                               self.att_weight).squeeze(-1)
 
         # apply temperature
         att_map = att_map / self.temp
-
         att_map = F.softmax(att_map, dim=-2)
 
         return att_map
 
     def _project(self, x, att_map):
-        x1 = self.proj_with_att(torch.matmul(att_map.squeeze(-1), x))
-        x2 = self.proj_without_att(x)
+        batch_size, num_nodes, _ = x.shape
+        
+        # Project for values
+        value = self.proj_with_att(x)  # (bs, N, out_dim)
+        value = value.view(batch_size, num_nodes, self.num_heads,
+                           self.head_dim)
+        
+        # Aggregate using attention map
+        agg_value = torch.einsum('bnnh,bnhd->bnhd', att_map, value)
+        agg_value = agg_value.contiguous().view(batch_size, num_nodes,
+                                                self.out_dim)
 
-        return x1 + x2
+        x_res = self.proj_without_att(x)
+
+        return agg_value + x_res
 
     def _apply_BN(self, x):
         org_size = x.size()
@@ -497,12 +522,16 @@ class Model(nn.Module):
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
 
+        num_heads = d_args.get("num_heads", 1)
+
         self.GAT_layer_S = GraphAttentionLayer(filts[-1][-1],
                                                gat_dims[0],
-                                               temperature=temperatures[0])
+                                               temperature=temperatures[0],
+                                               num_heads=num_heads)
         self.GAT_layer_T = GraphAttentionLayer(filts[-1][-1],
                                                gat_dims[0],
-                                               temperature=temperatures[1])
+                                               temperature=temperatures[1],
+                                               num_heads=num_heads)
 
         self.HtrgGAT_layer_ST11 = HtrgGraphAttentionLayer(
             gat_dims[0], gat_dims[1], temperature=temperatures[2])
