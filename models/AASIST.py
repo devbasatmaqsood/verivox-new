@@ -95,8 +95,7 @@ class GraphAttentionLayer(nn.Module):
                                          self.num_heads, self.head_dim)
         
         # size: (#bs, #node, #node, #num_heads)
-        att_map = torch.einsum('b n n h i,h i o->b n n h', att_features,
-                               self.att_weight).squeeze(-1)
+        att_map = torch.einsum('b n h i, h i o -> b n h o', att_features, self.att_weight).squeeze(-1)
 
         # apply temperature
         att_map = att_map / self.temp
