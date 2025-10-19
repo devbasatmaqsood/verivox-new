@@ -340,7 +340,7 @@ def train_epoch(
         ii += 1
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
+        _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]), labels=batch_y)
         batch_loss = criterion(batch_out, batch_y)
         running_loss += batch_loss.item() * batch_size
         optim.zero_grad()

@@ -465,6 +465,50 @@ class Residual_block(nn.Module):
         out = self.mp(out)
         return out
 
+import math
+
+class AAMSoftmax(nn.Module):
+    def __init__(self, in_features, n_class, margin=0.2, scale=30, easy_margin=False):
+        super(AAMSoftmax, self).__init__()
+        self.in_features = in_features
+        self.n_class = n_class
+        self.m = margin
+        self.s = scale
+        self.weight = torch.nn.Parameter(torch.FloatTensor(n_class, in_features), requires_grad=True)
+        nn.init.xavier_normal_(self.weight, gain=1)
+
+        self.easy_margin = easy_margin
+        self.cos_m = math.cos(self.m)
+        self.sin_m = math.sin(self.m)
+        self.th = math.cos(math.pi - self.m)
+        self.mm = math.sin(math.pi - self.m) * self.m
+
+    def forward(self, x, label=None):
+        # cos(theta)
+        cosine = F.linear(F.normalize(x), F.normalize(self.weight))
+        
+        # This is required for training and inference
+        if label is None:
+            return cosine * self.s
+
+        # cos(theta + m)
+        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
+        phi = cosine * self.cos_m - sine * self.sin_m
+
+        if self.easy_margin:
+            phi = torch.where(cosine > 0, phi, cosine)
+        else:
+            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+
+        # Create a one-hot vector for the labels
+        one_hot = torch.zeros(cosine.size(), device=x.device)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+
+        # Apply the margin to the correct class
+        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+        output *= self.s
+        
+        return output
 
 class Model(nn.Module):
     def __init__(self, d_args):
@@ -523,9 +567,16 @@ class Model(nn.Module):
         self.pool_hS2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
         self.pool_hT2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
 
-        self.out_layer = nn.Linear(5 * gat_dims[1], 2)
+        # Set up the final classifier
+        self.classifier_head = d_args.get("classifier_head", "linear")
+        if self.classifier_head == "AAM":
+            aam_margin = d_args.get("aam_margin", 0.2)
+            aam_scale = d_args.get("aam_scale", 30)
+            self.out_layer = AAMSoftmax(in_features=5 * gat_dims[1], n_class=2, margin=aam_margin, scale=aam_scale)
+        else:
+            self.out_layer = nn.Linear(5 * gat_dims[1], 2)
 
-    def forward(self, x, Freq_aug=False):
+    def forward(self, x, Freq_aug=False, labels=None):
 
         x = x.unsqueeze(1)
         x = self.conv_time(x, mask=Freq_aug)
@@ -602,6 +653,10 @@ class Model(nn.Module):
             [T_max, T_avg, S_max, S_avg, master.squeeze(1)], dim=1)
 
         last_hidden = self.drop(last_hidden)
-        output = self.out_layer(last_hidden)
+        
+        if self.classifier_head == "AAM":
+            output = self.out_layer(last_hidden, labels)
+        else:
+            output = self.out_layer(last_hidden)
 
         return last_hidden, output
