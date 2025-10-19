@@ -15,19 +15,12 @@ from torch import Tensor
 
 
 class GraphAttentionLayer(nn.Module):
-    def _init_(self, in_dim, out_dim, **kwargs):
-        super()._init_()
-
-        self.num_heads = kwargs.get("num_heads", 1)
-        if out_dim % self.num_heads != 0:
-            raise ValueError("out_dim must be divisible by num_heads")
-        self.head_dim = out_dim // self.num_heads
-        self.out_dim = out_dim
+    def __init__(self, in_dim, out_dim, **kwargs):
+        super().__init__()
 
         # attention map
         self.att_proj = nn.Linear(in_dim, out_dim)
-        self.att_weight = self._init_new_params(self.num_heads, self.head_dim,
-                                                1)
+        self.att_weight = self._init_new_params(out_dim, 1)
 
         # project
         self.proj_with_att = nn.Linear(in_dim, out_dim)
@@ -52,13 +45,13 @@ class GraphAttentionLayer(nn.Module):
         x   :(#bs, #node, #dim)
         '''
         # apply input dropout
-        x_dropped = self.input_drop(x)
+        x = self.input_drop(x)
 
         # derive attention map
-        att_map = self._derive_att_map(x_dropped)
+        att_map = self._derive_att_map(x)
 
         # projection
-        x = self._project(x_dropped, att_map)
+        x = self._project(x, att_map)
 
         # apply batch norm
         x = self._apply_BN(x)
@@ -82,44 +75,26 @@ class GraphAttentionLayer(nn.Module):
     def _derive_att_map(self, x):
         '''
         x           :(#bs, #node, #dim)
-        out_shape   :(#bs, #node, #node, #num_heads)
+        out_shape   :(#bs, #node, #node, 1)
         '''
-        batch_size, num_nodes, _ = x.shape
-        att_features = self._pairwise_mul_nodes(x)
-        
+        att_map = self._pairwise_mul_nodes(x)
         # size: (#bs, #node, #node, #dim_out)
-        att_features = torch.tanh(self.att_proj(att_features))
-        
-        # Reshape for multi-head
-        att_features = att_features.view(batch_size, num_nodes, num_nodes,
-                                         self.num_heads, self.head_dim)
-        
-        # size: (#bs, #node, #node, #num_heads)
-        att_map = torch.einsum('b n m h d, h d f -> b n m h f', att_features, self.att_weight)
-
+        att_map = torch.tanh(self.att_proj(att_map))
+        # size: (#bs, #node, #node, 1)
+        att_map = torch.matmul(att_map, self.att_weight)
 
         # apply temperature
         att_map = att_map / self.temp
+
         att_map = F.softmax(att_map, dim=-2)
 
         return att_map
 
     def _project(self, x, att_map):
-        batch_size, num_nodes, _ = x.shape
-        
-        # Project for values
-        value = self.proj_with_att(x)  # (bs, N, out_dim)
-        value = value.view(batch_size, num_nodes, self.num_heads,
-                           self.head_dim)
-        
-        # Aggregate using attention map
-        agg_value = torch.einsum('bnnh,bnhd->bnhd', att_map, value)
-        agg_value = agg_value.contiguous().view(batch_size, num_nodes,
-                                                self.out_dim)
+        x1 = self.proj_with_att(torch.matmul(att_map.squeeze(-1), x))
+        x2 = self.proj_without_att(x)
 
-        x_res = self.proj_without_att(x)
-
-        return agg_value + x_res
+        return x1 + x2
 
     def _apply_BN(self, x):
         org_size = x.size()
@@ -136,10 +111,8 @@ class GraphAttentionLayer(nn.Module):
 
 
 class HtrgGraphAttentionLayer(nn.Module):
-    def _init_(self, in_dim, out_dim, **kwargs):
-        super()._init_()
-        
-        self.num_heads = kwargs.get("num_heads", 1)
+    def __init__(self, in_dim, out_dim, **kwargs):
+        super().__init__()
 
         self.proj_type1 = nn.Linear(in_dim, in_dim)
         self.proj_type2 = nn.Linear(in_dim, in_dim)
@@ -310,8 +283,8 @@ class HtrgGraphAttentionLayer(nn.Module):
 
 
 class GraphPool(nn.Module):
-    def _init_(self, k: float, in_dim: int, p: Union[float, int]):
-        super()._init_()
+    def __init__(self, k: float, in_dim: int, p: Union[float, int]):
+        super().__init__()
         self.k = k
         self.sigmoid = nn.Sigmoid()
         self.proj = nn.Linear(in_dim, 1)
@@ -358,7 +331,7 @@ class CONV(nn.Module):
     def to_hz(mel):
         return 700 * (10**(mel / 2595) - 1)
 
-    def _init_(self,
+    def __init__(self,
                  out_channels,
                  kernel_size,
                  sample_rate=16000,
@@ -369,7 +342,7 @@ class CONV(nn.Module):
                  bias=False,
                  groups=1,
                  mask=False):
-        super()._init_()
+        super().__init__()
         if in_channels != 1:
 
             msg = "SincConv only support one input channel (here, in_channels = {%i})" % (
@@ -438,8 +411,8 @@ class CONV(nn.Module):
 
 
 class Residual_block(nn.Module):
-    def _init_(self, nb_filts, first=False):
-        super()._init_()
+    def __init__(self, nb_filts, first=False):
+        super().__init__()
         self.first = first
 
         if not self.first:
@@ -494,15 +467,14 @@ class Residual_block(nn.Module):
 
 
 class Model(nn.Module):
-    def _init_(self, d_args):
-        super()._init_()
+    def __init__(self, d_args):
+        super().__init__()
 
         self.d_args = d_args
         filts = d_args["filts"]
         gat_dims = d_args["gat_dims"]
         pool_ratios = d_args["pool_ratios"]
         temperatures = d_args["temperatures"]
-        num_heads = d_args.get("num_heads", 1)
 
         self.conv_time = CONV(out_channels=filts[0],
                               kernel_size=d_args["first_conv"],
@@ -527,12 +499,10 @@ class Model(nn.Module):
 
         self.GAT_layer_S = GraphAttentionLayer(filts[-1][-1],
                                                gat_dims[0],
-                                               temperature=temperatures[0],
-                                               num_heads=num_heads)
+                                               temperature=temperatures[0])
         self.GAT_layer_T = GraphAttentionLayer(filts[-1][-1],
                                                gat_dims[0],
-                                               temperature=temperatures[1],
-                                               num_heads=num_heads)
+                                               temperature=temperatures[1])
 
         self.HtrgGAT_layer_ST11 = HtrgGraphAttentionLayer(
             gat_dims[0], gat_dims[1], temperature=temperatures[2])
