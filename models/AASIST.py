@@ -451,9 +451,56 @@ class CONV(nn.Module):
                         groups=1)
 
 
+class ChannelAttention(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+        self.fc = nn.Sequential(
+            nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return self.sigmoid(out)
+
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        x = self.conv1(x)
+        return self.sigmoid(x)
+
+
+class CBAM(nn.Module):
+    def __init__(self, in_planes, ratio=16, kernel_size=7):
+        super(CBAM, self).__init__()
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.sa = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        x = self.ca(x) * x
+        x = self.sa(x) * x
+        return x
+
 class Residual_block(nn.Module):
-    def __init__(self, nb_filts, first=False):
+    def __init__(self, nb_filts, first=False, attention_module=None):
         super().__init__()
+        self.attention_module = attention_module
         self.first = first
 
         if not self.first:
@@ -484,6 +531,9 @@ class Residual_block(nn.Module):
             self.downsample = False
         self.mp = nn.MaxPool2d((1, 3))  # self.mp = nn.MaxPool2d((1,4))
 
+        if self.attention_module == "CBAM":
+            self.cbam = CBAM(nb_filts[1])
+
     def forward(self, x):
         identity = x
         if not self.first:
@@ -502,6 +552,9 @@ class Residual_block(nn.Module):
         if self.downsample:
             identity = self.conv_downsample(identity)
 
+        if self.attention_module == "CBAM":
+            out = self.cbam(out)
+
         out += identity
         out = self.mp(out)
         return out
@@ -512,6 +565,7 @@ class Model(nn.Module):
         super().__init__()
 
         self.d_args = d_args
+        attention_module = d_args.get("attention_module", None)
         filts = d_args["filts"]
         gat_dims = d_args["gat_dims"]
         pool_ratios = d_args["pool_ratios"]
@@ -527,12 +581,12 @@ class Model(nn.Module):
         self.selu = nn.SELU(inplace=True)
 
         self.encoder = nn.Sequential(
-            nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
-            nn.Sequential(Residual_block(nb_filts=filts[2])),
-            nn.Sequential(Residual_block(nb_filts=filts[3])),
-            nn.Sequential(Residual_block(nb_filts=filts[4])),
-            nn.Sequential(Residual_block(nb_filts=filts[4])),
-            nn.Sequential(Residual_block(nb_filts=filts[4])))
+            nn.Sequential(Residual_block(nb_filts=filts[1], first=True, attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[2], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[3], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[4], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[4], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[4], attention_module=attention_module)))
 
         self.pos_S = nn.Parameter(torch.randn(1, 23, filts[-1][-1]))
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
