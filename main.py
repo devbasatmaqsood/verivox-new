@@ -59,7 +59,7 @@ def main(args: argparse.Namespace) -> None:
                       "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
                           track, prefix_2019))
     eval_trial_path = (
-        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021.LA.eval.trl.txt"))
+        Path("/kaggle/input/avsspoof-2021/LA-keys-full/ASVspoof2021.LA.eval.trl.txt"))
 
     # define model related paths
     model_tag = "{}_{}_ep{}_bs{}".format(
@@ -228,16 +228,24 @@ def get_loader(
 
     trn_database_path = database_path / "ASVspoof2019_{}_train/".format(track)
     dev_database_path = database_path / "ASVspoof2019_{}_dev/".format(track)
-    eval_database_path = database_path / "/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/".format(track)
+    # === START OF YOUR EDITS ===
 
-    trn_list_path = (database_path /
-                     "ASVspoof2019_{}_cm_protocols/{}.cm.train.trn.txt".format(
-                         track, prefix_2019))
-    dev_trial_path = (database_path /
-                      "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
-                          track, prefix_2019))
-    eval_trial_path = (
-        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021.LA.eval.trl.txt"))
+# This path points to the 2021 evaluation audio folder
+eval_database_path = Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/")
+
+# These paths correctly use the "database_path" from your config (for 2019 data)
+trn_list_path = (database_path /
+                 "ASVspoof2019_{}_cm_protocols/{}.cm.train.trn.txt".format(
+                     track, prefix_2019))
+dev_trial_path = (database_path /
+                  "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
+                      track, prefix_2019))
+
+# This path points to the 2021 evaluation protocol file
+eval_trial_path = (
+    Path("/kaggle/input/avsspoof-2021/LA-keys-full/ASVspoof2021.LA.eval.trl.txt"))
+
+# === END OF YOUR EDITS ===
 
     d_label_trn, file_train = genSpoof_list(dir_meta=trn_list_path,
                                             is_train=True,
