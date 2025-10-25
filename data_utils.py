@@ -24,8 +24,7 @@ def genSpoof_list(dir_meta, is_train=False, is_eval=False):
 
     elif is_eval:
         for line in l_meta:
-            _, key, _, _, _ = line.strip().split(" ")
-            #key = line.strip()
+            key = line.strip()  # This is the fix
             file_list.append(key)
         return file_list
     else:
