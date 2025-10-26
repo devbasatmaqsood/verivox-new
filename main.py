@@ -132,7 +132,7 @@ def main(args: argparse.Namespace) -> None:
         produce_evaluation_file(dev_loader, model, device,
                         metric_path/"dev_score.txt", dev_trial_path)
 
-        asv_score_path_2019 = "/kaggle/input/asvpoof-2019-dataset/LA/ASVspoof2019_LA_asv_scores/ASVspoof2019.LA.asv.eval.gi.trl.scores.txt"
+        asv_score_path_2019 = "/kaggle/input/asvpoof-2019-dataset/LA/LA/ASVspoof2019_LA_asv_scores/ASVspoof2019.LA.asv.dev.gi.trl.scores.txt"
 
         dev_eer, dev_tdcf = calculate_tDCF_EER(
             cm_scores_file=metric_path/"dev_score.txt",
