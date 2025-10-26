@@ -130,10 +130,13 @@ def main(args: argparse.Namespace) -> None:
         running_loss = train_epoch(trn_loader, model, optimizer, device,
                                    scheduler, config)
         produce_evaluation_file(dev_loader, model, device,
-                                metric_path/"dev_score.txt", dev_trial_path)
+                        metric_path/"dev_score.txt", dev_trial_path)
+
+        asv_score_path_2019 = "/kaggle/input/asvpoof-2019-dataset/LA/ASVspoof2019_LA_asv_scores/ASVspoof2019.LA.asv.eval.gi.trl.scores.txt"
+
         dev_eer, dev_tdcf = calculate_tDCF_EER(
             cm_scores_file=metric_path/"dev_score.txt",
-            asv_score_file=database_path/config["asv_score_path"],
+            asv_score_file=asv_score_path_2019,  # Use the 2019 path here
             output_file=metric_path/"dev_t-DCF_EER_{}epo.txt".format(epoch),
             printout=False)
         print("DONE.\nLoss:{:.5f}, dev_eer: {:.3f}, dev_tdcf:{:.5f}".format(
