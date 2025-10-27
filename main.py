@@ -59,7 +59,7 @@ def main(args: argparse.Namespace) -> None:
                       "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
                           track, prefix_2019))
     eval_trial_path = (
-        Path("/kaggle/input/avsspoof-2021/LA-keys-full/ASVspoof2021.LA.eval.trl.txt"))
+        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"))
 
     # define model related paths
     model_tag = "{}_{}_ep{}_bs{}".format(
@@ -246,7 +246,7 @@ def get_loader(
 
 # This path points to the 2021 evaluation protocol file
     eval_trial_path = (
-        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"))
+        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"))
 
 # === END OF YOUR EDITS ===
 
@@ -319,9 +319,21 @@ def produce_evaluation_file(
     assert len(trial_lines) == len(fname_list) == len(score_list)
     with open(save_path, "w") as fh:
         for fn, sco, trl in zip(fname_list, score_list, trial_lines):
-            _, utt_id, _, src, key = trl.strip().split(' ')
-            assert fn == utt_id
-            fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+            # Check if this is a 2019 dev file (5 columns) or 2021 eval file (1 column)
+            parts = trl.strip().split(' ')
+            
+            if len(parts) == 5:
+                # This is a 2019 dev file
+                _, utt_id, _, src, key = parts
+                assert fn == utt_id
+                fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+            else:
+                # This is a 2021 eval file
+                utt_id = parts[0]
+                assert fn == utt_id
+                # The 2021 file doesn't have src or key, so we write a placeholder
+                # This format is just for your score file; the evaluation.py only needs the score.
+                fh.write("{} {} {} {}\n".format(utt_id, "2021_eval", "2021_eval", sco))
     print("Scores saved to {}".format(save_path))
 
 
