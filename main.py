@@ -234,7 +234,7 @@ def get_loader(
     # === START OF YOUR EDITS ===
 
 # This path points to the 2021 evaluation audio folder
-    eval_database_path = Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/")
+    eval_database_path = Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021_LA_eval/")
 
 # These paths correctly use the "database_path" from your config (for 2019 data)
     trn_list_path = (database_path /
