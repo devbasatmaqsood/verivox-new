@@ -1,6 +1,7 @@
 import numpy as np
 import soundfile as sf
 import torch
+import torchaudio
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -72,8 +73,10 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
-        X_pad = pad_random(X, self.cut)
+    # Use torchaudio.load, which returns a tensor. Convert to numpy for padding.
+        waveform, _ = torchaudio.load(str(self.base_dir / f"flac/{key}.flac"))
+        X_numpy = waveform.numpy().squeeze()
+        X_pad = pad_random(X_numpy, self.cut)
         x_inp = Tensor(X_pad)
         y = self.labels[key]
         return x_inp, y
@@ -92,7 +95,9 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
-        X_pad = pad(X, self.cut)
+    # Use torchaudio.load, which returns a tensor. Convert to numpy for padding.
+        waveform, _ = torchaudio.load(str(self.base_dir / f"flac/{key}.flac"))
+        X_numpy = waveform.numpy().squeeze()
+        X_pad = pad(X_numpy, self.cut)
         x_inp = Tensor(X_pad)
         return x_inp, key
