@@ -189,9 +189,8 @@ def main(args: argparse.Namespace) -> None:
     produce_evaluation_file(eval_loader, model, device, eval_score_path,
                             eval_trial_path)
     eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                                             asv_score_file=database_path /
-                                             config["asv_score_path"],
-                                             output_file=model_tag / "t-DCF_EER.txt")
+                                         asv_score_file=asv_score_path_2019,
+                                         output_file=model_tag / "t-DCF_EER.txt")
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
     f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
