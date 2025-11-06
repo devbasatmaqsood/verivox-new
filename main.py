@@ -59,7 +59,7 @@ def main(args: argparse.Namespace) -> None:
                       "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
                           track, prefix_2019))
     eval_trial_path = (
-        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"))
+        Path("/kaggle/working/formatted_eval_protocol.txt"))
 
     # define model related paths
     model_tag = "{}_{}_ep{}_bs{}".format(
@@ -245,7 +245,7 @@ def get_loader(
 
 # This path points to the 2021 evaluation protocol file
     eval_trial_path = (
-        Path("/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"))
+        Path("/kaggle/working/formatted_eval_protocol.txt"))
 
 # === END OF YOUR EDITS ===
 
