@@ -24,8 +24,9 @@ def genSpoof_list(dir_meta, is_train=False, is_eval=False):
         return d_meta, file_list
 
     elif is_eval:
+        # We are now reading our new 5-column file
         for line in l_meta:
-            key = line.strip()  # This is the fix
+            _, key, _, _, _ = line.strip().split(" ")
             file_list.append(key)
         return file_list
     else:
