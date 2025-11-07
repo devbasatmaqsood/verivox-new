@@ -1,5 +1,5 @@
 """
-AASIST
+AASIST_CBAM
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
@@ -18,16 +18,9 @@ class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
-        self.num_heads = kwargs.get("num_heads", 1)
-        if out_dim % self.num_heads != 0:
-            raise ValueError("out_dim must be divisible by num_heads")
-        self.head_dim = out_dim // self.num_heads
-        self.out_dim = out_dim
-
         # attention map
         self.att_proj = nn.Linear(in_dim, out_dim)
-        self.att_weight = self._init_new_params(self.num_heads, self.head_dim,
-                                                1)
+        self.att_weight = self._init_new_params(out_dim, 1)
 
         # project
         self.proj_with_att = nn.Linear(in_dim, out_dim)
@@ -82,60 +75,26 @@ class GraphAttentionLayer(nn.Module):
     def _derive_att_map(self, x):
         '''
         x           :(#bs, #node, #dim)
-        out_shape   :(#bs, #node, #node, #num_heads)
+        out_shape   :(#bs, #node, #node, 1)
         '''
-        batch_size, num_nodes, _ = x.shape
-        att_features = self._pairwise_mul_nodes(x)  # (B, N, N, dim)
+        att_map = self._pairwise_mul_nodes(x)
+        # size: (#bs, #node, #node, #dim_out)
+        att_map = torch.tanh(self.att_proj(att_map))
+        # size: (#bs, #node, #node, 1)
+        att_map = torch.matmul(att_map, self.att_weight)
 
-    # size: (#bs, #node, #node, #dim_out)
-        att_features = torch.tanh(self.att_proj(att_features))
-
-    # Reshape for multi-head
-    # att_features shape -> (B, N, N, H, head_dim)
-        att_features = att_features.view(batch_size, num_nodes, num_nodes,
-                                     self.num_heads, self.head_dim)
-
-    # att_weight shape -> (H, head_dim, O). For this model O == 1.
-    # Correct einsum for 5D input:
-    # Input:  att_features (b n m h i)
-    # Weight: att_weight   (h i o)
-    # Output: (b n m h o)
-        att_map = torch.einsum('b n m h i, h i o -> b n m h o',
-                          att_features, self.att_weight)
-
-    # if output last dim is 1 (o==1), squeeze it to get (b, n, m, h)
-        if att_map.size(-1) == 1:
-            att_map = att_map.squeeze(-1)  # -> (B, N, N, H)
-
-    # apply temperature
+        # apply temperature
         att_map = att_map / self.temp
 
-    # softmax along source node dimension (the middle N)
-        att_map = F.softmax(att_map, dim=2)  # dim=2 corresponds to the 'm' axis
+        att_map = F.softmax(att_map, dim=-2)
 
         return att_map
 
-
     def _project(self, x, att_map):
-        batch_size, num_nodes, _ = x.shape
+        x1 = self.proj_with_att(torch.matmul(att_map.squeeze(-1), x))
+        x2 = self.proj_without_att(x)
 
-    # Project for values: (B, N, out_dim) -> (B, N, H, head_dim)
-        value = self.proj_with_att(x)  # (bs, N, out_dim)
-        value = value.view(batch_size, num_nodes, self.num_heads,
-                       self.head_dim)  # (B, N, H, D)
-
-    # att_map is (B, N, M, H)   where M == N (the source nodes)
-    # value is   (B, M, H, D)   (we need to contract over M)
-    # Correct einsum: 'b n m h, b m h d -> b n h d' (contract over m)
-        agg_value = torch.einsum('b n m h, b m h d -> b n h d', att_map, value)
-
-    # flatten heads back to out_dim
-        agg_value = agg_value.contiguous().view(batch_size, num_nodes, self.out_dim)
-
-        x_res = self.proj_without_att(x)
-
-        return agg_value + x_res
-
+        return x1 + x2
 
     def _apply_BN(self, x):
         org_size = x.size()
@@ -450,7 +409,6 @@ class CONV(nn.Module):
                         bias=None,
                         groups=1)
 
-
 class ChannelAttention(nn.Module):
     def __init__(self, in_planes, ratio=16):
         super(ChannelAttention, self).__init__()
@@ -500,8 +458,8 @@ class CBAM(nn.Module):
 class Residual_block(nn.Module):
     def __init__(self, nb_filts, first=False, attention_module=None):
         super().__init__()
-        self.attention_module = attention_module
         self.first = first
+        self.attention_module = attention_module
 
         if not self.first:
             self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
@@ -529,7 +487,7 @@ class Residual_block(nn.Module):
 
         else:
             self.downsample = False
-        self.mp = nn.MaxPool2d((1, 3))  # self.mp = nn.MaxPool2d((1,4))
+        self.mp = nn.MaxPool2d((1, 3))
 
         if self.attention_module == "CBAM":
             self.cbam = CBAM(nb_filts[1])
@@ -541,7 +499,7 @@ class Residual_block(nn.Module):
             out = self.selu(out)
         else:
             out = x
-        out = self.conv1(x)
+        out = self.conv1(out)
 
         # print('out',out.shape)
         out = self.bn2(out)
@@ -592,16 +550,12 @@ class Model(nn.Module):
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
 
-        num_heads = d_args.get("num_heads", 1)
-
         self.GAT_layer_S = GraphAttentionLayer(filts[-1][-1],
                                                gat_dims[0],
-                                               temperature=temperatures[0],
-                                               num_heads=num_heads)
+                                               temperature=temperatures[0])
         self.GAT_layer_T = GraphAttentionLayer(filts[-1][-1],
                                                gat_dims[0],
-                                               temperature=temperatures[1],
-                                               num_heads=num_heads)
+                                               temperature=temperatures[1])
 
         self.HtrgGAT_layer_ST11 = HtrgGraphAttentionLayer(
             gat_dims[0], gat_dims[1], temperature=temperatures[2])
@@ -704,3 +658,4 @@ class Model(nn.Module):
         output = self.out_layer(last_hidden)
 
         return last_hidden, output
+    
