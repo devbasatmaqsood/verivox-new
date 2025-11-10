@@ -96,17 +96,26 @@ def main(args: argparse.Namespace) -> None:
             torch.load(config["model_path"], map_location=device))
         print("Model loaded : {}".format(config["model_path"]))
         print("Start evaluation...")
+        # --- START MODIFIED ARGS.EVAL BLOCK ---
+        if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
+            print("Using 2021 paths for evaluation")
+            final_eval_trial_path = config["eval_2021_trial_path"]
+            final_asv_score_path = config["eval_2021_asv_score_path"] # Get 2021 ASV score path
+            output_filename = "EVAL_2021_t-DCF_EER.txt"
+        else:
+            print("Using 2019 paths for evaluation")
+            final_eval_trial_path = eval_trial_path
+            final_asv_score_path = database_path / config["asv_score_path"] # Fallback to 2019
+            output_filename = "t-DCF_EER.txt"
+
         produce_evaluation_file(eval_loader, model, device,
-                                eval_score_path, eval_trial_path)
-        calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                           asv_score_file=database_path /
-                           config["asv_score_path"],
-                           output_file=model_tag / "t-DCF_EER.txt")
+                                eval_score_path, final_eval_trial_path)
+        
         print("DONE.")
-        eval_eer, eval_tdcf = calculate_tDCF_EER(
-            cm_scores_file=eval_score_path,
-            asv_score_file=database_path / config["asv_score_path"],
-            output_file=model_tag/"loaded_model_t-DCF_EER.txt")
+        eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
+                                                 asv_score_file=final_asv_score_path,
+                                                 output_file=model_tag / output_filename)
+        # --- END MODIFIED ARGS.EVAL BLOCK ---
         sys.exit(0)
 
     # get optimizer and scheduler
@@ -153,13 +162,26 @@ def main(args: argparse.Namespace) -> None:
 
             # do evaluation whenever best model is renewed
             if str_to_bool(config["eval_all_best"]):
-                produce_evaluation_file(eval_loader, model, device,
-                                        eval_score_path, eval_trial_path)
+                # --- START MODIFIED FINAL EVAL BLOCK ---
+                if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
+                    print("Using 2021 paths for FINAL evaluation")
+                    final_eval_trial_path = config["eval_2021_trial_path"]
+                    final_asv_score_path = config["eval_2021_asv_score_path"] # Get 2021 ASV score path
+                    output_filename = "FINAL_2021_t-DCF_EER.txt"
+                else:
+                    print("Using 2019 paths for FINAL evaluation")
+                    final_eval_trial_path = eval_trial_path
+                    final_asv_score_path = database_path / config["asv_score_path"] # Fallback to 2019
+                    output_filename = "t-DCF_EER.txt"
+        
+                produce_evaluation_file(eval_loader, model, device, eval_score_path,
+                            final_eval_trial_path)
+    
                 eval_eer, eval_tdcf = calculate_tDCF_EER(
                     cm_scores_file=eval_score_path,
-                    asv_score_file=database_path / config["asv_score_path"],
-                    output_file=metric_path /
-                    "t-DCF_EER_{:03d}epo.txt".format(epoch))
+                    asv_score_file=final_asv_score_path, # <-- Use the correct 2021 path
+                    output_file=model_tag / output_filename)
+    # --- END MODIFIED FINAL EVAL BLOCK ---
 
                 log_text = "epoch{:03d}, ".format(epoch)
                 if eval_eer < best_eval_eer:
@@ -274,16 +296,33 @@ def get_loader(
                             drop_last=False,
                             pin_memory=True)
 
-    file_eval = genSpoof_list(dir_meta=eval_trial_path,
+    # --- START MODIFIED EVAL LOADER BLOCK ---
+    # Check if user has provided specific 2021 paths
+    if "eval_2021_database_path" in config and config["eval_2021_database_path"] is not None:
+        print("Using ASVspoof 2021 for FINAL Evaluation")
+        eval_db_path = Path(config["eval_2021_database_path"])
+        eval_trl_path = Path(config["eval_2021_trial_path"])
+    else:
+        # Fallback to original 2019 paths
+        print("Using ASVspoof 2019 for FINAL Evaluation")
+        eval_db_path = eval_database_path # from original code
+        eval_trl_path = eval_trial_path   # from original code
+
+    file_eval = genSpoof_list(dir_meta=eval_trl_path,
                               is_train=False,
-                              is_eval=True)
+                              is_eval=True) # Parser is compatible
+
+    print("no. evaluation files:", len(file_eval))
+    
     eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_eval,
-                                             base_dir=eval_database_path)
+                                             base_dir=eval_db_path)
+    
     eval_loader = DataLoader(eval_set,
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
                              pin_memory=True)
+    # --- END MODIFIED EVAL LOADER BLOCK ---
 
     return trn_loader, dev_loader, eval_loader
 

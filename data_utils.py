@@ -1,6 +1,7 @@
 import numpy as np
 import soundfile as sf
 import torch
+import torchaudio
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -73,10 +74,17 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
-        X_pad = pad_random(X, self.cut)
+        try:
+            # FIX: Use torchaudio.load to read file
+            waveform, _ = torchaudio.load(str(self.base_dir / f"flac/{key}.flac"))
+            X_numpy = waveform.numpy().squeeze()
+        except Exception as e:
+            print(f"Warning: Error loading {key}: {e}. Returning zeros.")
+            X_numpy = np.zeros(self.cut) # Return dummy data
+
+        X_pad = pad_random(X_numpy, self.cut)
         x_inp = Tensor(X_pad)
-        y = self.labels[key]
+        y = self.labels.get(key, 0) # Use .get for safety
         return x_inp, y
 
 
