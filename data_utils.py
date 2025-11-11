@@ -101,7 +101,14 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
-        X_pad = pad(X, self.cut)
+        try:
+            # Try to read the file
+            X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
+            X_pad = pad(X, self.cut)
+        except Exception as e:
+            # If reading fails, create a silent audio clip instead of crashing
+            print(f"\n[Warning] Failed to read {key}: {e}. Returning silent audio.\n")
+            X_pad = np.zeros(self.cut, dtype=np.float32)
+        
         x_inp = Tensor(X_pad)
         return x_inp, key
