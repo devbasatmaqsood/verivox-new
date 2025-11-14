@@ -335,10 +335,27 @@ def produce_evaluation_file(
     trial_path: str) -> None:
     """Perform evaluation and save the score to a file"""
     model.eval()
+    
+    # NEW: Robustly read and filter trial lines, just like genSpoof_list
+    valid_trial_lines = []
     with open(trial_path, "r") as f_trl:
-        trial_lines = f_trl.readlines()
+        all_lines = f_trl.readlines()
+    
+    for line in all_lines:
+        try:
+            # This logic mimics genSpoof_list
+            parts = line.strip().split(' ')
+            if len(parts) == 5: # Make sure it has exactly 5 parts
+                valid_trial_lines.append(line)
+        except Exception:
+            # This line is malformed or blank, skip it
+            continue
+    
+    # Use the *filtered* list for assertion and writing
+    trial_lines = valid_trial_lines 
+    # --- END NEW CODE ---
+    
     fname_list = []
-    score_list = []
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
