@@ -356,6 +356,7 @@ def produce_evaluation_file(
     # --- END NEW CODE ---
     
     fname_list = []
+    score_list = []
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
