@@ -18,22 +18,42 @@ def genSpoof_list(dir_meta, is_train=False, is_eval=False):
 
     if is_train:
         for line in l_meta:
-            _, key, _, _, label = line.strip().split(" ")
-            file_list.append(key)
-            d_meta[key] = 1 if label == "bonafide" else 0
+            try:
+                # Use split() (no args) and check length
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    _, key, _, _, label = parts
+                    file_list.append(key)
+                    d_meta[key] = 1 if label == "bonafide" else 0
+            except Exception:
+                # Skip blank or malformed lines
+                continue
         return d_meta, file_list
 
     elif is_eval:
         for line in l_meta:
-            _, key, _, _, _ = line.strip().split(" ")
-            #key = line.strip()
-            file_list.append(key)
+            try:
+                # Use split() (no args) and check length
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    _, key, _, _, _ = parts
+                    file_list.append(key)
+            except Exception:
+                # Skip blank or malformed lines
+                continue
         return file_list
     else:
         for line in l_meta:
-            _, key, _, _, label = line.strip().split(" ")
-            file_list.append(key)
-            d_meta[key] = 1 if label == "bonafide" else 0
+            try:
+                # Use split() (no args) and check length
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    _, key, _, _, label = parts
+                    file_list.append(key)
+                    d_meta[key] = 1 if label == "bonafide" else 0
+            except Exception:
+                # Skip blank or malformed lines
+                continue
         return d_meta, file_list
 
 
