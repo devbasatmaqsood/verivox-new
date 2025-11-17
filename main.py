@@ -344,6 +344,7 @@ def produce_evaluation_file(
 
     for line in all_lines:
         try:
+            # Use split() to handle spaces or tabs
             parts = line.strip().split()
             if len(parts) == 5:
                 _, utt_id, _, src, key = parts
@@ -367,6 +368,7 @@ def produce_evaluation_file(
         # We must iterate through the batch to handle potential silent audio
         for i, utt_id in enumerate(utt_id_batch):
             # Only add files that are in our trial map
+            # This check is vital!
             if utt_id in trial_map:
                 fname_list.append(utt_id)
                 score_list.append(batch_score[i])
