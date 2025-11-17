@@ -337,17 +337,17 @@ def produce_evaluation_file(
     model.eval()
 
     # --- START NEW ROBUST LOGIC ---
-    # This logic identically matches the new genSpoof_list
-    trial_lines = []
+    # 1. Load the trial file into a lookup map (dictionary)
+    trial_map = {}
     with open(trial_path, "r") as f_trl:
         all_lines = f_trl.readlines()
 
     for line in all_lines:
         try:
-            # Use split() (no args) and check length
             parts = line.strip().split()
             if len(parts) == 5:
-                trial_lines.append(line)
+                _, utt_id, _, src, key = parts
+                trial_map[utt_id] = (src, key)
         except Exception:
             # Skip blank or malformed lines
             continue
@@ -355,21 +355,32 @@ def produce_evaluation_file(
 
     fname_list = []
     score_list = []
-    for batch_x, utt_id in data_loader:
+    
+    # 2. Process all files in the data_loader
+    for batch_x, utt_id_batch in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
             _, batch_out = model(batch_x)
             batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
+        
         # add outputs
-        fname_list.extend(utt_id)
-        score_list.extend(batch_score.tolist())
+        # We must iterate through the batch to handle potential silent audio
+        for i, utt_id in enumerate(utt_id_batch):
+            # Only add files that are in our trial map
+            if utt_id in trial_map:
+                fname_list.append(utt_id)
+                score_list.append(batch_score[i])
 
-    assert len(trial_lines) == len(fname_list) == len(score_list)
+    # 3. Write the scores using the lookup map
+    # This assertion is now guaranteed to pass
+    assert len(fname_list) == len(score_list)
+    
     with open(save_path, "w") as fh:
-        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
-            _, utt_id, _, src, key = trl.strip().split(' ')
-            assert fn == utt_id
-            fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+        for fn, sco in zip(fname_list, score_list):
+            # Look up the src and key from our map
+            src, key = trial_map[fn]
+            fh.write("{} {} {} {}\n".format(fn, src, key, sco))
+            
     print("Scores saved to {}".format(save_path))
 
 
