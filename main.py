@@ -336,23 +336,39 @@ def produce_evaluation_file(
     """Perform evaluation and save the score to a file"""
     model.eval()
 
-    # --- START NEW ROBUST LOGIC ---
-    # 1. Load the trial file into a lookup map (dictionary)
+    # --- START NEW SMART LOGIC ---
+    # 1. Load the trial file into a lookup map
     trial_map = {}
     with open(trial_path, "r") as f_trl:
         all_lines = f_trl.readlines()
 
     for line in all_lines:
         try:
-            # Use split() to handle spaces or tabs
             parts = line.strip().split()
-            if len(parts) == 5:
-                _, utt_id, _, src, key = parts
+            # We need at least 2 columns (SpkID, Key) to be useful
+            if len(parts) >= 2:
+                # In 2021 metadata, the Key (LA_E_...) is usually the 2nd column (index 1)
+                utt_id = parts[1]
+                
+                # Smart Search: Find the label anywhere in the line
+                if "bonafide" in parts:
+                    key = "bonafide"
+                    src = "-" 
+                elif "spoof" in parts:
+                    key = "spoof"
+                    src = "spoof" 
+                    # Optional: Try to find attack ID (A07, etc)
+                    for p in parts:
+                        if p.startswith("A") and len(p) == 3 and p[1:].isdigit():
+                            src = p
+                            break
+                else:
+                    continue # Skip lines without labels
+
                 trial_map[utt_id] = (src, key)
         except Exception:
-            # Skip blank or malformed lines
             continue
-    # --- END NEW ROBUST LOGIC ---
+    # --- END NEW SMART LOGIC ---
 
     fname_list = []
     score_list = []
@@ -365,21 +381,15 @@ def produce_evaluation_file(
             batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
         
         # add outputs
-        # We must iterate through the batch to handle potential silent audio
         for i, utt_id in enumerate(utt_id_batch):
             # Only add files that are in our trial map
-            # This check is vital!
             if utt_id in trial_map:
                 fname_list.append(utt_id)
                 score_list.append(batch_score[i])
 
-    # 3. Write the scores using the lookup map
-    # This assertion is now guaranteed to pass
-    assert len(fname_list) == len(score_list)
-    
+    # 3. Write the scores
     with open(save_path, "w") as fh:
         for fn, sco in zip(fname_list, score_list):
-            # Look up the src and key from our map
             src, key = trial_map[fn]
             fh.write("{} {} {} {}\n".format(fn, src, key, sco))
             

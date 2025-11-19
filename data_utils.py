@@ -10,50 +10,47 @@ __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
 
 
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
-
+    
     d_meta = {}
     file_list = []
     with open(dir_meta, "r") as f:
         l_meta = f.readlines()
 
-    if is_train:
-        for line in l_meta:
-            try:
-                # Use split() (no args) and check length
-                parts = line.strip().split()
-                if len(parts) == 5:
-                    _, key, _, _, label = parts
-                    file_list.append(key)
-                    d_meta[key] = 1 if label == "bonafide" else 0
-            except Exception:
-                # Skip blank or malformed lines
-                continue
-        return d_meta, file_list
+    for line in l_meta:
+        try:
+            parts = line.strip().split()
+            # We check if the line has at least 2 parts (Speaker ID and Utterance ID)
+            if len(parts) >= 2:
+                # In both 2019 and 2021 datasets, the Key (Filename) is at index 1
+                key = parts[1]
+                
+                # Smart Label Search: Look for the label anywhere in the line
+                if "bonafide" in parts:
+                    label = "bonafide"
+                elif "spoof" in parts:
+                    label = "spoof"
+                else:
+                    # If no label is found:
+                    # If it's the blind evaluation set (is_eval), we might accept it without a label.
+                    # But since you are using metadata now, we expect labels.
+                    if is_eval:
+                        # Optionally add just the key if you want to run blind
+                        # file_list.append(key) 
+                        pass
+                    continue
 
+                file_list.append(key)
+                d_meta[key] = 1 if label == "bonafide" else 0
+        except Exception:
+            continue
+
+    # Return the correct format based on the flags
+    if is_train:
+        return d_meta, file_list
     elif is_eval:
-        for line in l_meta:
-            try:
-                # Use split() (no args) and check length
-                parts = line.strip().split()
-                if len(parts) == 5:
-                    _, key, _, _, _ = parts
-                    file_list.append(key)
-            except Exception:
-                # Skip blank or malformed lines
-                continue
         return file_list
     else:
-        for line in l_meta:
-            try:
-                # Use split() (no args) and check length
-                parts = line.strip().split()
-                if len(parts) == 5:
-                    _, key, _, _, label = parts
-                    file_list.append(key)
-                    d_meta[key] = 1 if label == "bonafide" else 0
-            except Exception:
-                # Skip blank or malformed lines
-                continue
+        # For dev set
         return d_meta, file_list
 
 
