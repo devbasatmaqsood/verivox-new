@@ -335,45 +335,51 @@ def produce_evaluation_file(
     trial_path: str) -> None:
     """Perform evaluation and save the score to a file"""
     model.eval()
+    
+    print(f"--- DEBUGGING produce_evaluation_file ---")
+    print(f"Reading trial file from: {trial_path}")
 
-    # --- START NEW SMART LOGIC ---
     # 1. Load the trial file into a lookup map
     trial_map = {}
     with open(trial_path, "r") as f_trl:
         all_lines = f_trl.readlines()
+        print(f"Total lines in trial file: {len(all_lines)}")
 
     for line in all_lines:
         try:
             parts = line.strip().split()
-            # We need at least 2 columns (SpkID, Key) to be useful
             if len(parts) >= 2:
-                # In 2021 metadata, the Key (LA_E_...) is usually the 2nd column (index 1)
                 utt_id = parts[1]
-                
-                # Smart Search: Find the label anywhere in the line
+                # Smart Search
                 if "bonafide" in parts:
                     key = "bonafide"
                     src = "-" 
                 elif "spoof" in parts:
                     key = "spoof"
                     src = "spoof" 
-                    # Optional: Try to find attack ID (A07, etc)
                     for p in parts:
                         if p.startswith("A") and len(p) == 3 and p[1:].isdigit():
                             src = p
                             break
                 else:
-                    continue # Skip lines without labels
+                    continue 
 
                 trial_map[utt_id] = (src, key)
         except Exception:
             continue
-    # --- END NEW SMART LOGIC ---
+            
+    print(f"Total items loaded into trial_map: {len(trial_map)}")
+    if len(trial_map) > 0:
+        print(f"Sample trial_map key: {list(trial_map.keys())[0]}")
+    else:
+        print("ERROR: trial_map is EMPTY! Check the parsing logic.")
 
     fname_list = []
     score_list = []
     
+    print("Starting batch processing...")
     # 2. Process all files in the data_loader
+    debug_counter = 0
     for batch_x, utt_id_batch in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
@@ -382,10 +388,19 @@ def produce_evaluation_file(
         
         # add outputs
         for i, utt_id in enumerate(utt_id_batch):
-            # Only add files that are in our trial map
+            if debug_counter < 3:
+                print(f"Checking loader key: '{utt_id}' against trial_map...")
+                if utt_id in trial_map:
+                    print(f"   MATCH FOUND!")
+                else:
+                    print(f"   NO MATCH!")
+                debug_counter += 1
+
             if utt_id in trial_map:
                 fname_list.append(utt_id)
                 score_list.append(batch_score[i])
+
+    print(f"Total scores collected: {len(score_list)}")
 
     # 3. Write the scores
     with open(save_path, "w") as fh:
