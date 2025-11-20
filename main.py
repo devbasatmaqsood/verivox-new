@@ -207,12 +207,26 @@ def main(args: argparse.Namespace) -> None:
     if n_swa_update > 0:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
+
+    # --- FIX: Check for 2021 paths just like we did earlier ---
+    if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
+        print("Using 2021 paths for FINAL evaluation")
+        final_eval_trial_path = config["eval_2021_trial_path"]
+        final_asv_score_path = config["eval_2021_asv_score_path"]
+        output_filename = "FINAL_2021_t-DCF_EER.txt"
+    else:
+        print("Using 2019 paths for FINAL evaluation")
+        final_eval_trial_path = eval_trial_path
+        final_asv_score_path = database_path / config["asv_score_path"]
+        output_filename = "t-DCF_EER.txt"
+
+    # Use the correct trial path here
     produce_evaluation_file(eval_loader, model, device, eval_score_path,
-                            eval_trial_path)
+                            final_eval_trial_path)
+    
     eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                                             asv_score_file=database_path /
-                                             config["asv_score_path"],
-                                             output_file=model_tag / "t-DCF_EER.txt")
+                                             asv_score_file=final_asv_score_path,
+                                             output_file=model_tag / output_filename)
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
     f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
