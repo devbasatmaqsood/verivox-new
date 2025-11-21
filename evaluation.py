@@ -8,101 +8,80 @@ def calculate_tDCF_EER(cm_scores_file,
                        asv_score_file,
                        output_file,
                        printout=True):
-    # Replace CM scores with your own scores or provide score file as the
-    # first argument.
-    # cm_scores_file =  'score_cm.txt'
-    # Replace ASV scores with organizers' scores or provide score file as
-    # the second argument.
-    # asv_score_file = 'ASVspoof2019.LA.asv.eval.gi.trl.scores.txt'
-
     # Fix tandem detection cost function (t-DCF) parameters
     Pspoof = 0.05
     cost_model = {
-        'Pspoof': Pspoof,  # Prior probability of a spoofing attack
-        'Ptar': (1 - Pspoof) * 0.99,  # Prior probability of target speaker
-        'Pnon': (1 - Pspoof) * 0.01,  # Prior probability of nontarget speaker
-        'Cmiss': 1,  # Cost of ASV system falsely rejecting target speaker
-        'Cfa': 10,  # Cost of ASV system falsely accepting nontarget speaker
-        'Cmiss_asv': 1,  # Cost of ASV system falsely rejecting target speaker
-        'Cfa_asv':
-        10,  # Cost of ASV system falsely accepting nontarget speaker
-        'Cmiss_cm': 1,  # Cost of CM system falsely rejecting target speaker
-        'Cfa_cm': 10,  # Cost of CM system falsely accepting spoof
+        'Pspoof': Pspoof,
+        'Ptar': (1 - Pspoof) * 0.99,
+        'Pnon': (1 - Pspoof) * 0.01,
+        'Cmiss': 1, 'Cfa': 10, 'Cmiss_asv': 1, 'Cfa_asv': 10, 'Cmiss_cm': 1, 'Cfa_cm': 10,
     }
-
-    # Load organizers' ASV scores
-    asv_data = np.genfromtxt(asv_score_file, dtype=str)
-    # asv_sources = asv_data[:, 0]
-    asv_keys = asv_data[:, 1]
-    asv_scores = asv_data[:, 2].astype(np.float)
 
     # Load CM scores
     cm_data = np.genfromtxt(cm_scores_file, dtype=str)
-    # cm_utt_id = cm_data[:, 0]
     cm_sources = cm_data[:, 1]
     cm_keys = cm_data[:, 2]
     cm_scores = cm_data[:, 3].astype(np.float)
-
-    # Extract target, nontarget, and spoof scores from the ASV scores
-    tar_asv = asv_scores[asv_keys == 'target']
-    non_asv = asv_scores[asv_keys == 'nontarget']
-    spoof_asv = asv_scores[asv_keys == 'spoof']
 
     # Extract bona fide (real human) and spoof scores from the CM scores
     bona_cm = cm_scores[cm_keys == 'bonafide']
     spoof_cm = cm_scores[cm_keys == 'spoof']
 
-    # EERs of the standalone systems and fix ASV operating point to
-    # EER threshold
-    eer_asv, asv_threshold = compute_eer(tar_asv, non_asv)
+    # EERs of the standalone systems
     eer_cm = compute_eer(bona_cm, spoof_cm)[0]
+    min_tDCF = None
 
-    attack_types = [f'A{_id:02d}' for _id in range(7, 20)]
-    if printout:
-        spoof_cm_breakdown = {
-            attack_type: cm_scores[cm_sources == attack_type]
-            for attack_type in attack_types
-        }
+    if asv_score_file is not None:
+        try:
+            # Load organizers' ASV scores
+            asv_data = np.genfromtxt(asv_score_file, dtype=str)
+            asv_keys = asv_data[:, 1]
+            asv_scores = asv_data[:, 2].astype(np.float)
 
-        eer_cm_breakdown = {
-            attack_type: compute_eer(bona_cm,
-                                     spoof_cm_breakdown[attack_type])[0]
-            for attack_type in attack_types
-        }
+            # Robust mapping for 2021 data
+            # Map 'bonafide' to 'target' if 'target' doesn't exist
+            if 'target' not in asv_keys and 'bonafide' in asv_keys:
+                print("Info: Mapping ASV 'bonafide' to 'target' for t-DCF calculation.")
+                asv_keys[asv_keys == 'bonafide'] = 'target'
+            
+            # Extract target, nontarget, and spoof scores from the ASV scores
+            tar_asv = asv_scores[asv_keys == 'target']
+            non_asv = asv_scores[asv_keys == 'nontarget']
+            spoof_asv = asv_scores[asv_keys == 'spoof']
 
-    [Pfa_asv, Pmiss_asv,
-     Pmiss_spoof_asv] = obtain_asv_error_rates(tar_asv, non_asv, spoof_asv,
-                                               asv_threshold)
+            # Skip ASV EER if we don't have targets or nontargets
+            if len(tar_asv) > 0 and len(non_asv) > 0:
+                eer_asv, asv_threshold = compute_eer(tar_asv, non_asv)
+                
+                [Pfa_asv, Pmiss_asv, Pmiss_spoof_asv] = obtain_asv_error_rates(
+                    tar_asv, non_asv, spoof_asv, asv_threshold)
 
-    # Compute t-DCF
-    tDCF_curve, CM_thresholds = compute_tDCF(bona_cm,
-                                             spoof_cm,
-                                             Pfa_asv,
-                                             Pmiss_asv,
-                                             Pmiss_spoof_asv,
-                                             cost_model,
-                                             print_cost=False)
+                # Compute t-DCF
+                tDCF_curve, CM_thresholds = compute_tDCF(bona_cm,
+                                                         spoof_cm,
+                                                         Pfa_asv,
+                                                         Pmiss_asv,
+                                                         Pmiss_spoof_asv,
+                                                         cost_model,
+                                                         print_cost=False)
+                min_tDCF_index = np.argmin(tDCF_curve)
+                min_tDCF = tDCF_curve[min_tDCF_index]
+            else:
+                print("Warning: ASV scores missing 'target' or 'nontarget' classes. Skipping t-DCF.")
 
-    # Minimum t-DCF
-    min_tDCF_index = np.argmin(tDCF_curve)
-    min_tDCF = tDCF_curve[min_tDCF_index]
+        except Exception as e:
+            print(f"Warning: Failed to calculate t-DCF: {e}")
+            print("Proceeding with EER only.")
 
     if printout:
         with open(output_file, "w") as f_res:
             f_res.write('\nCM SYSTEM\n')
-            f_res.write('\tEER\t\t= {:8.9f} % '
-                        '(Equal error rate for countermeasure)\n'.format(
-                            eer_cm * 100))
+            f_res.write('\tEER\t\t= {:8.9f} % (Equal error rate for countermeasure)\n'.format(eer_cm * 100))
 
-            f_res.write('\nTANDEM\n')
-            f_res.write('\tmin-tDCF\t\t= {:8.9f}\n'.format(min_tDCF))
+            if min_tDCF is not None:
+                f_res.write('\nTANDEM\n')
+                f_res.write('\tmin-tDCF\t\t= {:8.9f}\n'.format(min_tDCF))
 
-            f_res.write('\nBREAKDOWN CM SYSTEM\n')
-            for attack_type in attack_types:
-                _eer = eer_cm_breakdown[attack_type] * 100
-                f_res.write(
-                    f'\tEER {attack_type}\t\t= {_eer:8.9f} % (Equal error rate for {attack_type}\n'
-                )
         os.system(f"cat {output_file}")
 
     return eer_cm * 100, min_tDCF
