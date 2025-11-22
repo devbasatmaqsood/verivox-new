@@ -208,29 +208,41 @@ def main(args: argparse.Namespace) -> None:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
 
-    # --- FIX: Check for 2021 paths just like we did earlier ---
+    # --- 2021 Logic ---
     if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
         print("Using 2021 paths for FINAL evaluation")
         final_eval_trial_path = config["eval_2021_trial_path"]
         final_asv_score_path = config["eval_2021_asv_score_path"]
+        # Load the NEW protocol path
+        final_asv_protocol_path = config.get("eval_2021_asv_protocol_path", None)
         output_filename = "FINAL_2021_t-DCF_EER.txt"
     else:
         print("Using 2019 paths for FINAL evaluation")
         final_eval_trial_path = eval_trial_path
         final_asv_score_path = database_path / config["asv_score_path"]
+        final_asv_protocol_path = None # Not needed for 2019 (labels are in score file)
         output_filename = "t-DCF_EER.txt"
 
-    # Use the correct trial path here
     produce_evaluation_file(eval_loader, model, device, eval_score_path,
                             final_eval_trial_path)
     
+    # Pass the new protocol file to the calculator
     eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
                                              asv_score_file=final_asv_score_path,
-                                             output_file=model_tag / output_filename)
+                                             output_file=model_tag / output_filename,
+                                             asv_protocol_file=final_asv_protocol_path)
+
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
-    f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
+    if eval_tdcf is not None:
+        f_log.write("EER: {:.3f}, min t-DCF: {:.5f}\n".format(eval_eer, eval_tdcf))
+        print("Exp FIN. EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
+    else:
+        f_log.write("EER: {:.3f}, min t-DCF: NaN\n".format(eval_eer))
+        print("Exp FIN. EER: {:.3f}, min t-DCF: NaN".format(eval_eer))
     f_log.close()
+
+    # ... (Save best model logic) ...
 
     torch.save(model.state_dict(),
                model_save_path / "swa.pth")

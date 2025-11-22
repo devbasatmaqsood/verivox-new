@@ -4,10 +4,7 @@ import os
 import numpy as np
 
 
-def calculate_tDCF_EER(cm_scores_file,
-                       asv_score_file,
-                       output_file,
-                       printout=True):
+def calculate_tDCF_EER(cm_scores_file, asv_score_file, output_file, asv_protocol_file=None, printout=True):
     # Fix tandem detection cost function (t-DCF) parameters
     Pspoof = 0.05
     cost_model = {
@@ -19,7 +16,6 @@ def calculate_tDCF_EER(cm_scores_file,
 
     # Load CM scores
     cm_data = np.genfromtxt(cm_scores_file, dtype=str)
-    cm_sources = cm_data[:, 1]
     cm_keys = cm_data[:, 2]
     cm_scores = cm_data[:, 3].astype(np.float)
 
@@ -31,57 +27,75 @@ def calculate_tDCF_EER(cm_scores_file,
     eer_cm = compute_eer(bona_cm, spoof_cm)[0]
     min_tDCF = None
 
-    if asv_score_file is not None:
+    if asv_score_file:
         try:
-            # Load organizers' ASV scores
-            asv_data = np.genfromtxt(asv_score_file, dtype=str)
-            asv_keys = asv_data[:, 1]
-            asv_scores = asv_data[:, 2].astype(np.float)
-
-            # Robust mapping for 2021 data
-            # Map 'bonafide' to 'target' if 'target' doesn't exist
-            if 'target' not in asv_keys and 'bonafide' in asv_keys:
-                print("Info: Mapping ASV 'bonafide' to 'target' for t-DCF calculation.")
-                asv_keys[asv_keys == 'bonafide'] = 'target'
+            asv_keys = []
+            asv_scores = []
             
-            # Extract target, nontarget, and spoof scores from the ASV scores
+            # Scenario 1: We have a protocol file (New 2021 method)
+            if asv_protocol_file:
+                print(f"Loading ASV scores from: {asv_score_file}")
+                print(f"Loading ASV labels from: {asv_protocol_file}")
+                
+                # 1. Read Scores {filename: score}
+                score_map = {}
+                with open(asv_score_file, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            score_map[parts[0]] = float(parts[1])
+                
+                # 2. Read Protocol and match with Scores
+                with open(asv_protocol_file, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            key = parts[1] # Filename usually at index 1
+                            if key in score_map:
+                                # Find label
+                                label = "unknown"
+                                if "target" in parts: label = "target"
+                                elif "nontarget" in parts: label = "nontarget"
+                                elif "spoof" in parts: label = "spoof"
+                                
+                                if label != "unknown":
+                                    asv_keys.append(label)
+                                    asv_scores.append(score_map[key])
+
+                asv_keys = np.array(asv_keys)
+                asv_scores = np.array(asv_scores)
+
+            # Scenario 2: Old 2019 method (Everything in one file)
+            else:
+                asv_data = np.genfromtxt(asv_score_file, dtype=str)
+                asv_keys = asv_data[:, 1]
+                asv_scores = asv_data[:, 2].astype(np.float)
+
+            # Calculate t-DCF
             tar_asv = asv_scores[asv_keys == 'target']
             non_asv = asv_scores[asv_keys == 'nontarget']
             spoof_asv = asv_scores[asv_keys == 'spoof']
 
-            # Skip ASV EER if we don't have targets or nontargets
             if len(tar_asv) > 0 and len(non_asv) > 0:
                 eer_asv, asv_threshold = compute_eer(tar_asv, non_asv)
-                
                 [Pfa_asv, Pmiss_asv, Pmiss_spoof_asv] = obtain_asv_error_rates(
                     tar_asv, non_asv, spoof_asv, asv_threshold)
-
-                # Compute t-DCF
-                tDCF_curve, CM_thresholds = compute_tDCF(bona_cm,
-                                                         spoof_cm,
-                                                         Pfa_asv,
-                                                         Pmiss_asv,
-                                                         Pmiss_spoof_asv,
-                                                         cost_model,
-                                                         print_cost=False)
-                min_tDCF_index = np.argmin(tDCF_curve)
-                min_tDCF = tDCF_curve[min_tDCF_index]
+                
+                tDCF_curve, _ = compute_tDCF(bona_cm, spoof_cm, Pfa_asv, Pmiss_asv, Pmiss_spoof_asv, cost_model, False)
+                min_tDCF = tDCF_curve[np.argmin(tDCF_curve)]
             else:
-                print("Warning: ASV scores missing 'target' or 'nontarget' classes. Skipping t-DCF.")
+                print("Warning: ASV targets/nontargets not found. Skipping t-DCF.")
 
         except Exception as e:
             print(f"Warning: Failed to calculate t-DCF: {e}")
-            print("Proceeding with EER only.")
 
     if printout:
         with open(output_file, "w") as f_res:
             f_res.write('\nCM SYSTEM\n')
-            f_res.write('\tEER\t\t= {:8.9f} % (Equal error rate for countermeasure)\n'.format(eer_cm * 100))
-
+            f_res.write('\tEER\t\t= {:8.9f} % \n'.format(eer_cm * 100))
             if min_tDCF is not None:
                 f_res.write('\nTANDEM\n')
                 f_res.write('\tmin-tDCF\t\t= {:8.9f}\n'.format(min_tDCF))
-
         os.system(f"cat {output_file}")
 
     return eer_cm * 100, min_tDCF
