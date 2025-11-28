@@ -71,7 +71,8 @@ class KANLinear(nn.Module):
         with torch.no_grad():
             noise = (
                 (
-                    torch.rand(self.grid_size + self.spline_order, self.in_features, self.out_features)
+                    # CHANGED: grid_size + 1 instead of grid_size + spline_order
+                    torch.rand(self.grid_size + 1, self.in_features, self.out_features)
                     - 1 / 2
                 )
                 * self.scale_noise
@@ -85,7 +86,6 @@ class KANLinear(nn.Module):
                 )
             )
             if self.enable_standalone_scale_spline:
-                # torch.nn.init.constant_(self.spline_scaler, self.scale_spline)
                 torch.nn.init.kaiming_uniform_(self.spline_scaler, a=math.sqrt(5) * self.scale_spline)
 
     def b_splines(self, x: torch.Tensor):
