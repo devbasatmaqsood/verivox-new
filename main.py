@@ -96,26 +96,17 @@ def main(args: argparse.Namespace) -> None:
             torch.load(config["model_path"], map_location=device))
         print("Model loaded : {}".format(config["model_path"]))
         print("Start evaluation...")
-        # --- START MODIFIED ARGS.EVAL BLOCK ---
-        if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
-            print("Using 2021 paths for evaluation")
-            final_eval_trial_path = config["eval_2021_trial_path"]
-            final_asv_score_path = config["eval_2021_asv_score_path"] # Get 2021 ASV score path
-            output_filename = "EVAL_2021_t-DCF_EER.txt"
-        else:
-            print("Using 2019 paths for evaluation")
-            final_eval_trial_path = eval_trial_path
-            final_asv_score_path = database_path / config["asv_score_path"] # Fallback to 2019
-            output_filename = "t-DCF_EER.txt"
-
         produce_evaluation_file(eval_loader, model, device,
-                                eval_score_path, final_eval_trial_path)
-        
+                                eval_score_path, eval_trial_path)
+        calculate_tDCF_EER(cm_scores_file=eval_score_path,
+                           asv_score_file=database_path /
+                           config["asv_score_path"],
+                           output_file=model_tag / "t-DCF_EER.txt")
         print("DONE.")
-        eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                                                 asv_score_file=final_asv_score_path,
-                                                 output_file=model_tag / output_filename)
-        # --- END MODIFIED ARGS.EVAL BLOCK ---
+        eval_eer, eval_tdcf = calculate_tDCF_EER(
+            cm_scores_file=eval_score_path,
+            asv_score_file=database_path / config["asv_score_path"],
+            output_file=model_tag/"loaded_model_t-DCF_EER.txt")
         sys.exit(0)
 
     # get optimizer and scheduler
@@ -162,26 +153,13 @@ def main(args: argparse.Namespace) -> None:
 
             # do evaluation whenever best model is renewed
             if str_to_bool(config["eval_all_best"]):
-                # --- START MODIFIED FINAL EVAL BLOCK ---
-                if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
-                    print("Using 2021 paths for FINAL evaluation")
-                    final_eval_trial_path = config["eval_2021_trial_path"]
-                    final_asv_score_path = config["eval_2021_asv_score_path"] # Get 2021 ASV score path
-                    output_filename = "FINAL_2021_t-DCF_EER.txt"
-                else:
-                    print("Using 2019 paths for FINAL evaluation")
-                    final_eval_trial_path = eval_trial_path
-                    final_asv_score_path = database_path / config["asv_score_path"] # Fallback to 2019
-                    output_filename = "t-DCF_EER.txt"
-        
-                produce_evaluation_file(eval_loader, model, device, eval_score_path,
-                            final_eval_trial_path)
-    
+                produce_evaluation_file(eval_loader, model, device,
+                                        eval_score_path, eval_trial_path)
                 eval_eer, eval_tdcf = calculate_tDCF_EER(
                     cm_scores_file=eval_score_path,
-                    asv_score_file=final_asv_score_path, # <-- Use the correct 2021 path
-                    output_file=model_tag / output_filename)
-    # --- END MODIFIED FINAL EVAL BLOCK ---
+                    asv_score_file=database_path / config["asv_score_path"],
+                    output_file=metric_path /
+                    "t-DCF_EER_{:03d}epo.txt".format(epoch))
 
                 log_text = "epoch{:03d}, ".format(epoch)
                 if eval_eer < best_eval_eer:
@@ -207,42 +185,16 @@ def main(args: argparse.Namespace) -> None:
     if n_swa_update > 0:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
-
-    # --- 2021 Logic ---
-    if "eval_2021_trial_path" in config and config["eval_2021_trial_path"] is not None:
-        print("Using 2021 paths for FINAL evaluation")
-        final_eval_trial_path = config["eval_2021_trial_path"]
-        final_asv_score_path = config["eval_2021_asv_score_path"]
-        # Load the NEW protocol path
-        final_asv_protocol_path = config.get("eval_2021_asv_protocol_path", None)
-        output_filename = "FINAL_2021_t-DCF_EER.txt"
-    else:
-        print("Using 2019 paths for FINAL evaluation")
-        final_eval_trial_path = eval_trial_path
-        final_asv_score_path = database_path / config["asv_score_path"]
-        final_asv_protocol_path = None # Not needed for 2019 (labels are in score file)
-        output_filename = "t-DCF_EER.txt"
-
     produce_evaluation_file(eval_loader, model, device, eval_score_path,
-                            final_eval_trial_path)
-    
-    # Pass the new protocol file to the calculator
+                            eval_trial_path)
     eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                                             asv_score_file=final_asv_score_path,
-                                             output_file=model_tag / output_filename,
-                                             asv_protocol_file=final_asv_protocol_path)
-
+                                             asv_score_file=database_path /
+                                             config["asv_score_path"],
+                                             output_file=model_tag / "t-DCF_EER.txt")
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
-    if eval_tdcf is not None:
-        f_log.write("EER: {:.3f}, min t-DCF: {:.5f}\n".format(eval_eer, eval_tdcf))
-        print("Exp FIN. EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
-    else:
-        f_log.write("EER: {:.3f}, min t-DCF: NaN\n".format(eval_eer))
-        print("Exp FIN. EER: {:.3f}, min t-DCF: NaN".format(eval_eer))
+    f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
     f_log.close()
-
-    # ... (Save best model logic) ...
 
     torch.save(model.state_dict(),
                model_save_path / "swa.pth")
@@ -322,33 +274,16 @@ def get_loader(
                             drop_last=False,
                             pin_memory=True)
 
-    # --- START MODIFIED EVAL LOADER BLOCK ---
-    # Check if user has provided specific 2021 paths
-    if "eval_2021_database_path" in config and config["eval_2021_database_path"] is not None:
-        print("Using ASVspoof 2021 for FINAL Evaluation")
-        eval_db_path = Path(config["eval_2021_database_path"])
-        eval_trl_path = Path(config["eval_2021_trial_path"])
-    else:
-        # Fallback to original 2019 paths
-        print("Using ASVspoof 2019 for FINAL Evaluation")
-        eval_db_path = eval_database_path # from original code
-        eval_trl_path = eval_trial_path   # from original code
-
-    file_eval = genSpoof_list(dir_meta=eval_trl_path,
+    file_eval = genSpoof_list(dir_meta=eval_trial_path,
                               is_train=False,
-                              is_eval=True) # Parser is compatible
-
-    print("no. evaluation files:", len(file_eval))
-    
+                              is_eval=True)
     eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_eval,
-                                             base_dir=eval_db_path)
-    
+                                             base_dir=eval_database_path)
     eval_loader = DataLoader(eval_set,
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
                              pin_memory=True)
-    # --- END MODIFIED EVAL LOADER BLOCK ---
 
     return trn_loader, dev_loader, eval_loader
 
@@ -361,79 +296,25 @@ def produce_evaluation_file(
     trial_path: str) -> None:
     """Perform evaluation and save the score to a file"""
     model.eval()
-    
-    print(f"--- DEBUGGING produce_evaluation_file ---")
-    print(f"Reading trial file from: {trial_path}")
-
-    # 1. Load the trial file into a lookup map
-    trial_map = {}
     with open(trial_path, "r") as f_trl:
-        all_lines = f_trl.readlines()
-        print(f"Total lines in trial file: {len(all_lines)}")
-
-    for line in all_lines:
-        try:
-            parts = line.strip().split()
-            if len(parts) >= 2:
-                utt_id = parts[1]
-                # Smart Search
-                if "bonafide" in parts:
-                    key = "bonafide"
-                    src = "-" 
-                elif "spoof" in parts:
-                    key = "spoof"
-                    src = "spoof" 
-                    for p in parts:
-                        if p.startswith("A") and len(p) == 3 and p[1:].isdigit():
-                            src = p
-                            break
-                else:
-                    continue 
-
-                trial_map[utt_id] = (src, key)
-        except Exception:
-            continue
-            
-    print(f"Total items loaded into trial_map: {len(trial_map)}")
-    if len(trial_map) > 0:
-        print(f"Sample trial_map key: {list(trial_map.keys())[0]}")
-    else:
-        print("ERROR: trial_map is EMPTY! Check the parsing logic.")
-
+        trial_lines = f_trl.readlines()
     fname_list = []
     score_list = []
-    
-    print("Starting batch processing...")
-    # 2. Process all files in the data_loader
-    debug_counter = 0
-    for batch_x, utt_id_batch in data_loader:
+    for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
             _, batch_out = model(batch_x)
             batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
-        
         # add outputs
-        for i, utt_id in enumerate(utt_id_batch):
-            if debug_counter < 3:
-                print(f"Checking loader key: '{utt_id}' against trial_map...")
-                if utt_id in trial_map:
-                    print(f"   MATCH FOUND!")
-                else:
-                    print(f"   NO MATCH!")
-                debug_counter += 1
+        fname_list.extend(utt_id)
+        score_list.extend(batch_score.tolist())
 
-            if utt_id in trial_map:
-                fname_list.append(utt_id)
-                score_list.append(batch_score[i])
-
-    print(f"Total scores collected: {len(score_list)}")
-
-    # 3. Write the scores
+    assert len(trial_lines) == len(fname_list) == len(score_list)
     with open(save_path, "w") as fh:
-        for fn, sco in zip(fname_list, score_list):
-            src, key = trial_map[fn]
-            fh.write("{} {} {} {}\n".format(fn, src, key, sco))
-            
+        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
+            _, utt_id, _, src, key = trl.strip().split(' ')
+            assert fn == utt_id
+            fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
     print("Scores saved to {}".format(save_path))
 
 
