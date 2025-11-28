@@ -126,7 +126,9 @@ class KANLinear(nn.Module):
 
     def forward(self, x: torch.Tensor):
         original_shape = x.shape
-        x = x.view(-1, self.in_features)
+        
+        # CHANGED: Used .reshape() instead of .view() to handle non-contiguous inputs
+        x = x.reshape(-1, self.in_features)
 
         base_output = F.linear(self.base_activation(x), self.base_weight)
         spline_output = F.linear(
@@ -142,7 +144,8 @@ class KANLinear(nn.Module):
         
         output = base_output + spline_output
         
-        return output.view(*original_shape[:-1], self.out_features)
+        # CHANGED: Used .reshape() for the output as well to be safe
+        return output.reshape(*original_shape[:-1], self.out_features)
 
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
