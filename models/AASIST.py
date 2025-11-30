@@ -523,7 +523,42 @@ class Model(nn.Module):
         self.pool_hS2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
         self.pool_hT2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
 
-        self.out_layer = nn.Linear(5 * gat_dims[1], 2)
+        # ---------------------------------------------------------------------
+        # MODIFICATION: Increased dense layers from 1 to 5
+        # ---------------------------------------------------------------------
+        
+        # Calculate input dimension (5 concatenated features)
+        in_dim = 5 * gat_dims[1]
+        
+        # Define hidden dimension size. 
+        # You can keep it same as in_dim or set a fixed number (e.g., 128)
+        hidden_dim = in_dim 
+
+        self.out_layer = nn.Sequential(
+            # Layer 1: Input -> Hidden
+            nn.Linear(in_dim, hidden_dim),
+            nn.SELU(inplace=True),
+            nn.Dropout(0.3),
+            
+            # Layer 2: Hidden -> Hidden
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SELU(inplace=True),
+            nn.Dropout(0.3),
+            
+            # Layer 3: Hidden -> Hidden
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SELU(inplace=True),
+            nn.Dropout(0.3),
+            
+            # Layer 4: Hidden -> Hidden
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SELU(inplace=True),
+            nn.Dropout(0.3),
+            
+            # Layer 5: Hidden -> Output (2 classes)
+            nn.Linear(hidden_dim, 2)
+        )
+        # ---------------------------------------------------------------------
 
     def forward(self, x, Freq_aug=False):
 
