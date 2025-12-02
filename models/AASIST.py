@@ -569,31 +569,37 @@ class Model(nn.Module):
         # (#bs, #filt, #spec, #seq)
         e = self.encoder(x)
 
-        # [CORRECTED CODE] spectral GAT (GAT-S) using ASP
-        # e shape: (B, C, n_freq, n_time). 
-        # RENAMED 'F' -> 'n_freq' and 'T' -> 'n_time' to avoid conflict with torch.nn.functional (F)
+        # [CORRECTED CODE COMPLETE]
+        
+        # 1. Get dimensions
+        # e shape: (Batch, Channel, n_freq, n_time)
         B, C, n_freq, n_time = e.shape
         
-        # Reshape to treat each frequency bin as an independent sequence: (B*F, C, T)
+        # --- SPECTRAL GAT BRANCH (ASP) ---
+        # Reshape to treat each frequency bin as an independent sequence of time steps
         e_S_in = e.permute(0, 2, 1, 3).reshape(B * n_freq, C, n_time)
-        e_S_asp = self.asp_S(e_S_in)       # Output: (B*F, 2*C)
-        e_S = self.proj_S_asp(e_S_asp)     # Project back: (B*F, C)
-        e_S = e_S.view(B, n_freq, C)       # Reshape back to node format: (B, F, C)
+        e_S_asp = self.asp_S(e_S_in)       # ASP pooling over time
+        e_S = self.proj_S_asp(e_S_asp)     # Project back to channel dim
+        e_S = e_S.view(B, n_freq, C)       # Reshape to (Batch, Nodes, Feat)
         
-        # Add positional encoding (Shape matches: B, F, C)
+        # Add positional encoding
         e_S = e_S + self.pos_S
 
+        # Apply GAT and Graph Pooling
         gat_S = self.GAT_layer_S(e_S)
         out_S = self.pool_S(gat_S)
 
-        # [CORRECTED CODE] temporal GAT (GAT-T) using ASP
-        # We want to pool over Frequency for each Time node.
-        
-        # Reshape to treat each time step as an independent sequence: (B*T, C, F)
+        # --- TEMPORAL GAT BRANCH (ASP) ---
+        # Reshape to treat each time step as an independent sequence of frequency bins
         e_T_in = e.permute(0, 3, 1, 2).reshape(B * n_time, C, n_freq)
-        e_T_asp = self.asp_T(e_T_in)       # Output: (B*T, 2*C)
-        e_T = self.proj_T_asp(e_T_asp)     # Project back: (B*T, C)
-        e_T = e_T.view(B, n_time, C)       # Reshape back to node format: (B, T, C)
+        e_T_asp = self.asp_T(e_T_in)       # ASP pooling over freq
+        e_T = self.proj_T_asp(e_T_asp)     # Project back to channel dim
+        e_T = e_T.view(B, n_time, C)       # Reshape to (Batch, Nodes, Feat)
+
+        # [MISSING PART ADDED BELOW]
+        # Apply GAT and Graph Pooling for Temporal branch
+        gat_T = self.GAT_layer_T(e_T)
+        out_T = self.pool_T(gat_T)
 
         # learnable master node
         master1 = self.master1.expand(x.size(0), -1, -1)
