@@ -569,15 +569,16 @@ class Model(nn.Module):
         # (#bs, #filt, #spec, #seq)
         e = self.encoder(x)
 
-        # [NEW CODE] spectral GAT (GAT-S) using ASP
-        # e shape: (B, C, F, T). We want to pool over T (Time) for each F (Frequency node).
-        B, C, F, T = e.shape
+        # [CORRECTED CODE] spectral GAT (GAT-S) using ASP
+        # e shape: (B, C, n_freq, n_time). 
+        # RENAMED 'F' -> 'n_freq' and 'T' -> 'n_time' to avoid conflict with torch.nn.functional (F)
+        B, C, n_freq, n_time = e.shape
         
         # Reshape to treat each frequency bin as an independent sequence: (B*F, C, T)
-        e_S_in = e.permute(0, 2, 1, 3).reshape(B * F, C, T)
+        e_S_in = e.permute(0, 2, 1, 3).reshape(B * n_freq, C, n_time)
         e_S_asp = self.asp_S(e_S_in)       # Output: (B*F, 2*C)
         e_S = self.proj_S_asp(e_S_asp)     # Project back: (B*F, C)
-        e_S = e_S.view(B, F, C)            # Reshape back to node format: (B, F, C)
+        e_S = e_S.view(B, n_freq, C)       # Reshape back to node format: (B, F, C)
         
         # Add positional encoding (Shape matches: B, F, C)
         e_S = e_S + self.pos_S
@@ -585,14 +586,14 @@ class Model(nn.Module):
         gat_S = self.GAT_layer_S(e_S)
         out_S = self.pool_S(gat_S)
 
-        # [NEW CODE] temporal GAT (GAT-T) using ASP
-        # We want to pool over F (Frequency) for each T (Time node).
+        # [CORRECTED CODE] temporal GAT (GAT-T) using ASP
+        # We want to pool over Frequency for each Time node.
         
         # Reshape to treat each time step as an independent sequence: (B*T, C, F)
-        e_T_in = e.permute(0, 3, 1, 2).reshape(B * T, C, F)
+        e_T_in = e.permute(0, 3, 1, 2).reshape(B * n_time, C, n_freq)
         e_T_asp = self.asp_T(e_T_in)       # Output: (B*T, 2*C)
         e_T = self.proj_T_asp(e_T_asp)     # Project back: (B*T, C)
-        e_T = e_T.view(B, T, C)            # Reshape back to node format: (B, T, C)
+        e_T = e_T.view(B, n_time, C)       # Reshape back to node format: (B, T, C)
 
         # learnable master node
         master1 = self.master1.expand(x.size(0), -1, -1)
