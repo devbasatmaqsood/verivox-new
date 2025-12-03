@@ -1,5 +1,5 @@
 """
-AASIST
+AASIST_CBAM
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
@@ -409,11 +409,57 @@ class CONV(nn.Module):
                         bias=None,
                         groups=1)
 
+class ChannelAttention(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+        self.fc = nn.Sequential(
+            nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return self.sigmoid(out)
+
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        x = self.conv1(x)
+        return self.sigmoid(x)
+
+
+class CBAM(nn.Module):
+    def __init__(self, in_planes, ratio=16, kernel_size=7):
+        super(CBAM, self).__init__()
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.sa = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        x = self.ca(x) * x
+        x = self.sa(x) * x
+        return x
 
 class Residual_block(nn.Module):
-    def __init__(self, nb_filts, first=False):
+    def __init__(self, nb_filts, first=False, attention_module=None):
         super().__init__()
         self.first = first
+        self.attention_module = attention_module
 
         if not self.first:
             self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
@@ -441,7 +487,10 @@ class Residual_block(nn.Module):
 
         else:
             self.downsample = False
-        self.mp = nn.MaxPool2d((1, 3))  # self.mp = nn.MaxPool2d((1,4))
+        self.mp = nn.MaxPool2d((1, 3))
+
+        if self.attention_module == "CBAM":
+            self.cbam = CBAM(nb_filts[1])
 
     def forward(self, x):
         identity = x
@@ -450,7 +499,7 @@ class Residual_block(nn.Module):
             out = self.selu(out)
         else:
             out = x
-        out = self.conv1(x)
+        out = self.conv1(out)
 
         # print('out',out.shape)
         out = self.bn2(out)
@@ -461,34 +510,12 @@ class Residual_block(nn.Module):
         if self.downsample:
             identity = self.conv_downsample(identity)
 
+        if self.attention_module == "CBAM":
+            out = self.cbam(out)
+
         out += identity
         out = self.mp(out)
         return out
-
-class AttentiveStatsPool(nn.Module):
-    def __init__(self, in_dim, bottleneck_dim=128):
-        super().__init__()
-        # Attention mechanism
-        self.linear1 = nn.Conv1d(in_dim, bottleneck_dim, kernel_size=1)  # equals W*x + b
-        self.activation = nn.Tanh()
-        self.linear2 = nn.Conv1d(bottleneck_dim, in_dim, kernel_size=1)  # equals V*x + k
-        self.softmax = nn.Softmax(dim=2)
-
-    def forward(self, x):
-        # x shape: (Batch, Channel, Time)
-        alpha = self.linear1(x)
-        alpha = self.activation(alpha)
-        alpha = self.linear2(alpha)
-        alpha = self.softmax(alpha)
-
-        mean = torch.sum(alpha * x, dim=2)
-        residuals = x - mean.unsqueeze(2)
-        # Weighted variance
-        variance = torch.sum(alpha * residuals**2, dim=2)
-        std = torch.sqrt(variance.clamp(min=1e-9))
-        
-        # Concatenate mean and std
-        return torch.cat([mean, std], dim=1)
 
 
 class Model(nn.Module):
@@ -496,6 +523,7 @@ class Model(nn.Module):
         super().__init__()
 
         self.d_args = d_args
+        attention_module = d_args.get("attention_module", None)
         filts = d_args["filts"]
         gat_dims = d_args["gat_dims"]
         pool_ratios = d_args["pool_ratios"]
@@ -509,21 +537,15 @@ class Model(nn.Module):
         self.drop = nn.Dropout(0.5, inplace=True)
         self.drop_way = nn.Dropout(0.2, inplace=True)
         self.selu = nn.SELU(inplace=True)
-        
-        self.encoder = nn.Sequential(
-            nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
-            nn.Sequential(Residual_block(nb_filts=filts[2])),
-            nn.Sequential(Residual_block(nb_filts=filts[3])),
-            nn.Sequential(Residual_block(nb_filts=filts[4])),
-            nn.Sequential(Residual_block(nb_filts=filts[4])),
-            nn.Sequential(Residual_block(nb_filts=filts[4])))
-        # [NEW CODE START] Initialize ASP and Projections
-        self.asp_S = AttentiveStatsPool(filts[-1][-1], 128)
-        self.proj_S_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
 
-        self.asp_T = AttentiveStatsPool(filts[-1][-1], 128)
-        self.proj_T_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
-        # [NEW CODE END]
+        self.encoder = nn.Sequential(
+            nn.Sequential(Residual_block(nb_filts=filts[1], first=True, attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[2], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[3], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[4], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[4], attention_module=attention_module)),
+            nn.Sequential(Residual_block(nb_filts=filts[4], attention_module=attention_module)))
+
         self.pos_S = nn.Parameter(torch.randn(1, 23, filts[-1][-1]))
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
@@ -569,35 +591,17 @@ class Model(nn.Module):
         # (#bs, #filt, #spec, #seq)
         e = self.encoder(x)
 
-        # [CORRECTED CODE COMPLETE]
-        
-        # 1. Get dimensions
-        # e shape: (Batch, Channel, n_freq, n_time)
-        B, C, n_freq, n_time = e.shape
-        
-        # --- SPECTRAL GAT BRANCH (ASP) ---
-        # Reshape to treat each frequency bin as an independent sequence of time steps
-        e_S_in = e.permute(0, 2, 1, 3).reshape(B * n_freq, C, n_time)
-        e_S_asp = self.asp_S(e_S_in)       # ASP pooling over time
-        e_S = self.proj_S_asp(e_S_asp)     # Project back to channel dim
-        e_S = e_S.view(B, n_freq, C)       # Reshape to (Batch, Nodes, Feat)
-        
-        # Add positional encoding
-        e_S = e_S + self.pos_S
+        # spectral GAT (GAT-S)
+        e_S, _ = torch.max(torch.abs(e), dim=3)  # max along time
+        e_S = e_S.transpose(1, 2) + self.pos_S
 
-        # Apply GAT and Graph Pooling
         gat_S = self.GAT_layer_S(e_S)
-        out_S = self.pool_S(gat_S)
+        out_S = self.pool_S(gat_S)  # (#bs, #node, #dim)
 
-        # --- TEMPORAL GAT BRANCH (ASP) ---
-        # Reshape to treat each time step as an independent sequence of frequency bins
-        e_T_in = e.permute(0, 3, 1, 2).reshape(B * n_time, C, n_freq)
-        e_T_asp = self.asp_T(e_T_in)       # ASP pooling over freq
-        e_T = self.proj_T_asp(e_T_asp)     # Project back to channel dim
-        e_T = e_T.view(B, n_time, C)       # Reshape to (Batch, Nodes, Feat)
+        # temporal GAT (GAT-T)
+        e_T, _ = torch.max(torch.abs(e), dim=2)  # max along freq
+        e_T = e_T.transpose(1, 2)
 
-        # [MISSING PART ADDED BELOW]
-        # Apply GAT and Graph Pooling for Temporal branch
         gat_T = self.GAT_layer_T(e_T)
         out_T = self.pool_T(gat_T)
 
@@ -654,3 +658,4 @@ class Model(nn.Module):
         output = self.out_layer(last_hidden)
 
         return last_hidden, output
+    
