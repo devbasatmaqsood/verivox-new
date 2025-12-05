@@ -7,6 +7,8 @@ MIT license
 import random
 from typing import Union
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,17 +16,149 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+
+class KANLinear(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        grid_size=5,
+        spline_order=3,
+        scale_noise=0.1,
+        scale_base=1.0,
+        scale_spline=1.0,
+        enable_standalone_scale_spline=True,
+        base_activation=torch.nn.SiLU,
+        grid_eps=0.02,
+        grid_range=[-1, 1],
+    ):
+        super(KANLinear, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.grid_size = grid_size
+        self.spline_order = spline_order
+
+        h = (grid_range[1] - grid_range[0]) / grid_size
+        grid = (
+            (
+                torch.arange(-spline_order, grid_size + spline_order + 1) * h
+                + grid_range[0]
+            )
+            .expand(in_features, -1)
+            .contiguous()
+        )
+        self.register_buffer("grid", grid)
+
+        self.base_weight = nn.Parameter(torch.Tensor(out_features, in_features))
+        self.spline_weight = nn.Parameter(
+            torch.Tensor(out_features, in_features, grid_size + spline_order)
+        )
+        if enable_standalone_scale_spline:
+            self.spline_scaler = nn.Parameter(
+                torch.Tensor(out_features, in_features)
+            )
+
+        self.scale_noise = scale_noise
+        self.scale_base = scale_base
+        self.scale_spline = scale_spline
+        self.enable_standalone_scale_spline = enable_standalone_scale_spline
+        self.base_activation = base_activation()
+        self.grid_eps = grid_eps
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.kaiming_uniform_(self.base_weight, a=math.sqrt(5) * self.scale_base)
+        with torch.no_grad():
+            noise = (
+                (
+                    # CHANGED: grid_size + 1 instead of grid_size + spline_order
+                    torch.rand(self.grid_size + 1, self.in_features, self.out_features)
+                    - 1 / 2
+                )
+                * self.scale_noise
+                / self.grid_size
+            )
+            self.spline_weight.data.copy_(
+                (self.scale_spline if not self.enable_standalone_scale_spline else 1.0)
+                * self.curve2coeff(
+                    self.grid.T[self.spline_order : -self.spline_order],
+                    noise,
+                )
+            )
+            if self.enable_standalone_scale_spline:
+                torch.nn.init.kaiming_uniform_(self.spline_scaler, a=math.sqrt(5) * self.scale_spline)
+
+    def b_splines(self, x: torch.Tensor):
+        assert x.dim() == 2 and x.size(1) == self.in_features
+
+        grid = self.grid
+        x = x.unsqueeze(-1)
+        bases = ((x >= grid[:, :-1]) & (x < grid[:, 1:])).to(x.dtype)
+        for k in range(1, self.spline_order + 1):
+            bases = (
+                (x - grid[:, : -(k + 1)])
+                / (grid[:, k:-1] - grid[:, : -(k + 1)])
+                * bases[:, :, :-1]
+            ) + (
+                (grid[:, k + 1 :] - x)
+                / (grid[:, k + 1 :] - grid[:, 1:(-k)])
+                * bases[:, :, 1:]
+            )
+
+        assert bases.size() == (
+            x.size(0),
+            self.in_features,
+            self.grid_size + self.spline_order,
+        )
+        return bases.contiguous()
+
+    def curve2coeff(self, x: torch.Tensor, y: torch.Tensor):
+        A = self.b_splines(x).transpose(0, 1)
+        B = y.transpose(0, 1)
+        solution = torch.linalg.lstsq(A, B).solution
+        result = solution.permute(2, 0, 1)
+        assert result.size() == (
+            self.out_features,
+            self.in_features,
+            self.grid_size + self.spline_order,
+        )
+        return result.contiguous()
+
+    def forward(self, x: torch.Tensor):
+        original_shape = x.shape
+        
+        # CHANGED: Used .reshape() instead of .view() to handle non-contiguous inputs
+        x = x.reshape(-1, self.in_features)
+
+        base_output = F.linear(self.base_activation(x), self.base_weight)
+        spline_output = F.linear(
+            self.b_splines(x).view(x.size(0), -1),
+            self.spline_weight.view(self.out_features, -1),
+        )
+
+        if self.enable_standalone_scale_spline:
+            spline_output = spline_output + F.linear(
+                self.b_splines(x).view(x.size(0), -1),
+                (self.spline_scaler.unsqueeze(-1) * self.spline_weight).view(self.out_features, -1)
+            ) 
+        
+        output = base_output + spline_output
+        
+        # CHANGED: Used .reshape() for the output as well to be safe
+        return output.reshape(*original_shape[:-1], self.out_features)
+
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
-        # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim)
+       # attention map [REPLACED]
+        self.att_proj = KANLinear(in_dim, out_dim) # KAN Replaces Linear
         self.att_weight = self._init_new_params(out_dim, 1)
 
-        # project
-        self.proj_with_att = nn.Linear(in_dim, out_dim)
-        self.proj_without_att = nn.Linear(in_dim, out_dim)
+        # project [REPLACED]
+        self.proj_with_att = KANLinear(in_dim, out_dim) # KAN Replaces Linear
+        self.proj_without_att = KANLinear(in_dim, out_dim) # KAN Replaces Linear
 
         # batch norm
         self.bn = nn.BatchNorm1d(out_dim)
@@ -114,12 +248,13 @@ class HtrgGraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
-        self.proj_type1 = nn.Linear(in_dim, in_dim)
-        self.proj_type2 = nn.Linear(in_dim, in_dim)
+        # [REPLACED ALL LINEAR LAYERS WITH KAN]
+        self.proj_type1 = KANLinear(in_dim, in_dim)
+        self.proj_type2 = KANLinear(in_dim, in_dim)
 
         # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim)
-        self.att_projM = nn.Linear(in_dim, out_dim)
+        self.att_proj = KANLinear(in_dim, out_dim)
+        self.att_projM = KANLinear(in_dim, out_dim)
 
         self.att_weight11 = self._init_new_params(out_dim, 1)
         self.att_weight22 = self._init_new_params(out_dim, 1)
@@ -127,11 +262,11 @@ class HtrgGraphAttentionLayer(nn.Module):
         self.att_weightM = self._init_new_params(out_dim, 1)
 
         # project
-        self.proj_with_att = nn.Linear(in_dim, out_dim)
-        self.proj_without_att = nn.Linear(in_dim, out_dim)
+        self.proj_with_att = KANLinear(in_dim, out_dim)
+        self.proj_without_att = KANLinear(in_dim, out_dim)
 
-        self.proj_with_attM = nn.Linear(in_dim, out_dim)
-        self.proj_without_attM = nn.Linear(in_dim, out_dim)
+        self.proj_with_attM = KANLinear(in_dim, out_dim)
+        self.proj_without_attM = KANLinear(in_dim, out_dim)
 
         # batch norm
         self.bn = nn.BatchNorm1d(out_dim)
@@ -554,42 +689,7 @@ class Model(nn.Module):
         self.pool_hS2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
         self.pool_hT2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
 
-        # ---------------------------------------------------------------------
-        # MODIFICATION: Increased dense layers from 1 to 5
-        # ---------------------------------------------------------------------
-        
-        # Calculate input dimension (5 concatenated features)
-        in_dim = 5 * gat_dims[1]
-        
-        # Define hidden dimension size. 
-        # You can keep it same as in_dim or set a fixed number (e.g., 128)
-        hidden_dim = in_dim 
-
-        self.out_layer = nn.Sequential(
-            # Layer 1: Input -> Hidden
-            nn.Linear(in_dim, hidden_dim),
-            nn.SELU(inplace=True),
-            nn.Dropout(0.3),
-            
-            # Layer 2: Hidden -> Hidden
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SELU(inplace=True),
-            nn.Dropout(0.3),
-            
-            # Layer 3: Hidden -> Hidden
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SELU(inplace=True),
-            nn.Dropout(0.3),
-            
-            # Layer 4: Hidden -> Hidden
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SELU(inplace=True),
-            nn.Dropout(0.3),
-            
-            # Layer 5: Hidden -> Output (2 classes)
-            nn.Linear(hidden_dim, 2)
-        )
-        # ---------------------------------------------------------------------
+        self.out_layer = nn.Linear(5 * gat_dims[1], 2)
 
     def forward(self, x, Freq_aug=False):
 
