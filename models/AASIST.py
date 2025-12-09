@@ -516,6 +516,31 @@ class Residual_block(nn.Module):
         return out
 
 
+class AttentiveStatsPool(nn.Module):
+    def __init__(self, in_dim, bottleneck_dim=128):
+        super().__init__()
+        # Attention mechanism
+        self.linear1 = nn.Conv1d(in_dim, bottleneck_dim, kernel_size=1)  # equals W*x + b
+        self.activation = nn.Tanh()
+        self.linear2 = nn.Conv1d(bottleneck_dim, in_dim, kernel_size=1)  # equals V*x + k
+        self.softmax = nn.Softmax(dim=2)
+
+    def forward(self, x):
+        # x shape: (Batch, Channel, Time)
+        alpha = self.linear1(x)
+        alpha = self.activation(alpha)
+        alpha = self.linear2(alpha)
+        alpha = self.softmax(alpha)
+
+        mean = torch.sum(alpha * x, dim=2)
+        residuals = x - mean.unsqueeze(2)
+        # Weighted variance
+        variance = torch.sum(alpha * residuals**2, dim=2)
+        std = torch.sqrt(variance.clamp(min=1e-9))
+        
+        # Concatenate mean and std
+        return torch.cat([mean, std], dim=1)
+
 class Model(nn.Module):
     def __init__(self, d_args):
         super().__init__()
@@ -542,6 +567,14 @@ class Model(nn.Module):
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])))
+
+        # [NEW CODE START] Initialize ASP and Projections
+        self.asp_S = AttentiveStatsPool(filts[-1][-1], 128)
+        self.proj_S_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
+
+        self.asp_T = AttentiveStatsPool(filts[-1][-1], 128)
+        self.proj_T_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
+        # [NEW CODE END]
 
         self.pos_S = nn.Parameter(torch.randn(1, 23, filts[-1][-1]))
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
@@ -573,7 +606,45 @@ class Model(nn.Module):
         self.pool_hS2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
         self.pool_hT2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
 
-        self.out_layer = nn.Linear(5 * gat_dims[1], 2)
+        # ---------------------------------------------------------------------
+        # MODIFICATION: 5 Dense Layers with MFM Activation
+        # ---------------------------------------------------------------------
+        
+        # Calculate input dimension (5 concatenated features)
+        in_dim = 5 * gat_dims[1]
+        
+        # Define hidden dimension. 
+        # We keep it consistent with in_dim, but you can change this (e.g., 128)
+        hidden_dim = in_dim 
+
+        self.out_layer = nn.Sequential(
+            # --- Layer 1 ---
+            # Project to double size -> MFM reduces back to hidden_dim
+            nn.Linear(in_dim, hidden_dim * 2),
+            MFM(),
+            nn.Dropout(0.3),
+            
+            # --- Layer 2 ---
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            MFM(),
+            nn.Dropout(0.3),
+            
+            # --- Layer 3 ---
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            MFM(),
+            nn.Dropout(0.3),
+            
+            # --- Layer 4 ---
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            MFM(),
+            nn.Dropout(0.3),
+            
+            # --- Layer 5 (Output) ---
+            # Final projection to 2 classes (Bonafide vs Spoof)
+            # No MFM needed here as this output goes to Loss Function (CCE)
+            nn.Linear(hidden_dim, 2)
+        )
+        # ---------------------------------------------------------------------
 
     def forward(self, x, Freq_aug=False):
 
@@ -588,16 +659,37 @@ class Model(nn.Module):
         # (#bs, #filt, #spec, #seq)
         e = self.encoder(x)
 
-        # spectral GAT (GAT-S)
-        e_S, _ = torch.max(torch.abs(e), dim=3)  # max along time
-        e_S = e_S.transpose(1, 2) + self.pos_S
+        # [CORRECTED CODE COMPLETE]
+        
+        # 1. Get dimensions
+        # e shape: (Batch, Channel, n_freq, n_time)
+        B, C, n_freq, n_time = e.shape
+        
+        # --- SPECTRAL GAT BRANCH (ASP) ---
+        # Reshape to treat each frequency bin as an independent sequence of time steps
+        e_S_in = e.permute(0, 2, 1, 3).reshape(B * n_freq, C, n_time)
+        e_S_asp = self.asp_S(e_S_in)       # ASP pooling over time
+        e_S = self.proj_S_asp(e_S_asp)     # Project back to channel dim
+        e_S = e_S.view(B, n_freq, C)       # Reshape to (Batch, Nodes, Feat)
+        
+        # Add positional encoding
+        e_S = e_S + self.pos_S
 
+        # Apply GAT and Graph Pooling
         gat_S = self.GAT_layer_S(e_S)
-        out_S = self.pool_S(gat_S)  # (#bs, #node, #dim)
+        out_S = self.pool_S(gat_S)
 
-        # temporal GAT (GAT-T)
-        e_T, _ = torch.max(torch.abs(e), dim=2)  # max along freq
-        e_T = e_T.transpose(1, 2)
+        # --- TEMPORAL GAT BRANCH (ASP) ---
+        # Reshape to treat each time step as an independent sequence of frequency bins
+        e_T_in = e.permute(0, 3, 1, 2).reshape(B * n_time, C, n_freq)
+        e_T_asp = self.asp_T(e_T_in)       # ASP pooling over freq
+        e_T = self.proj_T_asp(e_T_asp)     # Project back to channel dim
+        e_T = e_T.view(B, n_time, C)       # Reshape to (Batch, Nodes, Feat)
+
+        # [MISSING PART ADDED BELOW]
+        # Apply GAT and Graph Pooling for Temporal branch
+        gat_T = self.GAT_layer_T(e_T)
+        out_T = self.pool_T(gat_T)
 
         gat_T = self.GAT_layer_T(e_T)
         out_T = self.pool_T(gat_T)
