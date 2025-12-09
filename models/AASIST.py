@@ -617,26 +617,27 @@ class Model(nn.Module):
         # We keep it consistent with in_dim, but you can change this (e.g., 128)
         hidden_dim = in_dim 
 
+        
         self.out_layer = nn.Sequential(
             # --- Layer 1 ---
             # Project to double size -> MFM reduces back to hidden_dim
             nn.Linear(in_dim, hidden_dim * 2),
-            MFM(),
+            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
             nn.Dropout(0.3),
             
             # --- Layer 2 ---
             nn.Linear(hidden_dim, hidden_dim * 2),
-            MFM(),
+            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
             nn.Dropout(0.3),
             
             # --- Layer 3 ---
             nn.Linear(hidden_dim, hidden_dim * 2),
-            MFM(),
+            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
             nn.Dropout(0.3),
             
             # --- Layer 4 ---
             nn.Linear(hidden_dim, hidden_dim * 2),
-            MFM(),
+            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
             nn.Dropout(0.3),
             
             # --- Layer 5 (Output) ---
@@ -644,7 +645,6 @@ class Model(nn.Module):
             # No MFM needed here as this output goes to Loss Function (CCE)
             nn.Linear(hidden_dim, 2)
         )
-        # ---------------------------------------------------------------------
 
     def forward(self, x, Freq_aug=False):
 
