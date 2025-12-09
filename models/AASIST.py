@@ -530,10 +530,14 @@ class Model(nn.Module):
                               in_channels=1)
         self.first_bn = nn.BatchNorm2d(num_features=1)
 
-        # NEW CODE (__init__ - Model activation):
+        # NEW CODE:
         self.drop = nn.Dropout(0.5, inplace=True)
         self.drop_way = nn.Dropout(0.2, inplace=True)
-        self.mfm = MFM() # Replaced SELU
+        
+        # NEW: 1x1 Conv to map 1 channel to 2 channels
+        self.conv1x1_to_2chan = nn.Conv2d(1, 2, kernel_size=1)
+        self.mfm_initial = MFM() # MFM for the initial layer
+        self.mfm_deep = MFM() # MFM for the final dense layers
         
         self.encoder = nn.Sequential(
             nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
@@ -596,24 +600,24 @@ class Model(nn.Module):
         mfm_hidden_dim = hidden_dim * 2 # Required output channels before MFM
 
         self.out_layer = nn.Sequential(
-            # Layer 1: Input -> Hidden (Linear layer outputs 2*H)
+            # Layer 1: Input -> Hidden
             nn.Linear(in_dim, mfm_hidden_dim),
-            self.mfm, # Replaced SELU
+            self.mfm_deep, # <--- Updated instance
             nn.Dropout(0.3),
             
-            # Layer 2: Hidden -> Hidden (Input is H, Linear outputs 2*H)
+            # Layer 2: Hidden -> Hidden
             nn.Linear(hidden_dim, mfm_hidden_dim),
-            self.mfm, # Replaced SELU
+            self.mfm_deep, # <--- Updated instance
             nn.Dropout(0.3),
             
             # Layer 3: Hidden -> Hidden
             nn.Linear(hidden_dim, mfm_hidden_dim),
-            self.mfm, # Replaced SELU
+            self.mfm_deep, # <--- Updated instance
             nn.Dropout(0.3),
             
             # Layer 4: Hidden -> Hidden
             nn.Linear(hidden_dim, mfm_hidden_dim),
-            self.mfm, # Replaced SELU
+            self.mfm_deep, # <--- Updated instance
             nn.Dropout(0.3),
             
             # Layer 5: Hidden -> Output (2 classes)
@@ -625,10 +629,13 @@ class Model(nn.Module):
         x = x.unsqueeze(1)
         x = self.conv_time(x, mask=Freq_aug)
         x = x.unsqueeze(dim=1)
+        # NEW CODE:
         x = F.max_pool2d(torch.abs(x), (3, 3))
-        # NEW CODE (forward - applying initial activation):
         x = self.first_bn(x)
-        x = self.mfm(x) # Replaced SELU
+        
+        # NEW FIX: Convert to 2 channels, then apply MFM (2->1)
+        x = self.conv1x1_to_2chan(x)
+        x = self.mfm_initial(x) # <-- MFM is now used!
 
         # get embeddings using encoder
         # (#bs, #filt, #spec, #seq)
