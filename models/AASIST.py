@@ -5,7 +5,6 @@ MIT license
 """
 
 import random
-import math
 from typing import Union
 
 import numpy as np
@@ -14,150 +13,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-# [ADD THIS CLASS AT THE TOP OF models/AASIST.py]
-
-class KANLinear(nn.Module):
-    def __init__(
-        self,
-        in_features,
-        out_features,
-        grid_size=5,
-        spline_order=3,
-        scale_noise=0.1,
-        scale_base=1.0,
-        scale_spline=1.0,
-        enable_standalone_scale_spline=True,
-        base_activation=torch.nn.SiLU,
-        grid_eps=0.02,
-        grid_range=[-1, 1],
-    ):
-        super(KANLinear, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.grid_size = grid_size
-        self.spline_order = spline_order
-
-        h = (grid_range[1] - grid_range[0]) / grid_size
-        grid = (
-            (
-                torch.arange(-spline_order, grid_size + spline_order + 1) * h
-                + grid_range[0]
-            )
-            .expand(in_features, -1)
-            .contiguous()
-        )
-        self.register_buffer("grid", grid)
-
-        self.base_weight = nn.Parameter(torch.Tensor(out_features, in_features))
-        self.spline_weight = nn.Parameter(
-            torch.Tensor(out_features, in_features, grid_size + spline_order)
-        )
-        if enable_standalone_scale_spline:
-            self.spline_scaler = nn.Parameter(
-                torch.Tensor(out_features, in_features)
-            )
-
-        self.scale_noise = scale_noise
-        self.scale_base = scale_base
-        self.scale_spline = scale_spline
-        self.enable_standalone_scale_spline = enable_standalone_scale_spline
-        self.base_activation = base_activation()
-        self.grid_eps = grid_eps
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        torch.nn.init.kaiming_uniform_(self.base_weight, a=math.sqrt(5) * self.scale_base)
-        with torch.no_grad():
-            noise = (
-                (
-                    # CHANGED: grid_size + 1 instead of grid_size + spline_order
-                    torch.rand(self.grid_size + 1, self.in_features, self.out_features)
-                    - 1 / 2
-                )
-                * self.scale_noise
-                / self.grid_size
-            )
-            self.spline_weight.data.copy_(
-                (self.scale_spline if not self.enable_standalone_scale_spline else 1.0)
-                * self.curve2coeff(
-                    self.grid.T[self.spline_order : -self.spline_order],
-                    noise,
-                )
-            )
-            if self.enable_standalone_scale_spline:
-                torch.nn.init.kaiming_uniform_(self.spline_scaler, a=math.sqrt(5) * self.scale_spline)
-
-    def b_splines(self, x: torch.Tensor):
-        assert x.dim() == 2 and x.size(1) == self.in_features
-
-        grid = self.grid
-        x = x.unsqueeze(-1)
-        bases = ((x >= grid[:, :-1]) & (x < grid[:, 1:])).to(x.dtype)
-        for k in range(1, self.spline_order + 1):
-            bases = (
-                (x - grid[:, : -(k + 1)])
-                / (grid[:, k:-1] - grid[:, : -(k + 1)])
-                * bases[:, :, :-1]
-            ) + (
-                (grid[:, k + 1 :] - x)
-                / (grid[:, k + 1 :] - grid[:, 1:(-k)])
-                * bases[:, :, 1:]
-            )
-
-        assert bases.size() == (
-            x.size(0),
-            self.in_features,
-            self.grid_size + self.spline_order,
-        )
-        return bases.contiguous()
-
-    def curve2coeff(self, x: torch.Tensor, y: torch.Tensor):
-        A = self.b_splines(x).transpose(0, 1)
-        B = y.transpose(0, 1)
-        solution = torch.linalg.lstsq(A, B).solution
-        result = solution.permute(2, 0, 1)
-        assert result.size() == (
-            self.out_features,
-            self.in_features,
-            self.grid_size + self.spline_order,
-        )
-        return result.contiguous()
-
-    def forward(self, x: torch.Tensor):
-        original_shape = x.shape
-        
-        # CHANGED: Used .reshape() instead of .view() to handle non-contiguous inputs
-        x = x.reshape(-1, self.in_features)
-
-        base_output = F.linear(self.base_activation(x), self.base_weight)
-        spline_output = F.linear(
-            self.b_splines(x).view(x.size(0), -1),
-            self.spline_weight.view(self.out_features, -1),
-        )
-
-        if self.enable_standalone_scale_spline:
-            spline_output = spline_output + F.linear(
-                self.b_splines(x).view(x.size(0), -1),
-                (self.spline_scaler.unsqueeze(-1) * self.spline_weight).view(self.out_features, -1)
-            ) 
-        
-        output = base_output + spline_output
-        
-        # CHANGED: Used .reshape() for the output as well to be safe
-        return output.reshape(*original_shape[:-1], self.out_features)
 
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
-        # attention map [REPLACED]
-        self.att_proj = KANLinear(in_dim, out_dim) # KAN Replaces Linear
+        # attention map
+        self.att_proj = nn.Linear(in_dim, out_dim)
         self.att_weight = self._init_new_params(out_dim, 1)
 
-        # project [REPLACED]
-        self.proj_with_att = KANLinear(in_dim, out_dim) # KAN Replaces Linear
-        self.proj_without_att = KANLinear(in_dim, out_dim) # KAN Replaces Linear
+        # project
+        self.proj_with_att = nn.Linear(in_dim, out_dim)
+        self.proj_without_att = nn.Linear(in_dim, out_dim)
 
         # batch norm
         self.bn = nn.BatchNorm1d(out_dim)
@@ -247,13 +114,12 @@ class HtrgGraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
-        # [REPLACED ALL LINEAR LAYERS WITH KAN]
-        self.proj_type1 = KANLinear(in_dim, in_dim)
-        self.proj_type2 = KANLinear(in_dim, in_dim)
+        self.proj_type1 = nn.Linear(in_dim, in_dim)
+        self.proj_type2 = nn.Linear(in_dim, in_dim)
 
         # attention map
-        self.att_proj = KANLinear(in_dim, out_dim)
-        self.att_projM = KANLinear(in_dim, out_dim)
+        self.att_proj = nn.Linear(in_dim, out_dim)
+        self.att_projM = nn.Linear(in_dim, out_dim)
 
         self.att_weight11 = self._init_new_params(out_dim, 1)
         self.att_weight22 = self._init_new_params(out_dim, 1)
@@ -261,11 +127,11 @@ class HtrgGraphAttentionLayer(nn.Module):
         self.att_weightM = self._init_new_params(out_dim, 1)
 
         # project
-        self.proj_with_att = KANLinear(in_dim, out_dim)
-        self.proj_without_att = KANLinear(in_dim, out_dim)
+        self.proj_with_att = nn.Linear(in_dim, out_dim)
+        self.proj_without_att = nn.Linear(in_dim, out_dim)
 
-        self.proj_with_attM = KANLinear(in_dim, out_dim)
-        self.proj_without_attM = KANLinear(in_dim, out_dim)
+        self.proj_with_attM = nn.Linear(in_dim, out_dim)
+        self.proj_without_attM = nn.Linear(in_dim, out_dim)
 
         # batch norm
         self.bn = nn.BatchNorm1d(out_dim)
@@ -599,6 +465,31 @@ class Residual_block(nn.Module):
         out = self.mp(out)
         return out
 
+class AttentiveStatsPool(nn.Module):
+    def __init__(self, in_dim, bottleneck_dim=128):
+        super().__init__()
+        # Attention mechanism
+        self.linear1 = nn.Conv1d(in_dim, bottleneck_dim, kernel_size=1)  # equals W*x + b
+        self.activation = nn.Tanh()
+        self.linear2 = nn.Conv1d(bottleneck_dim, in_dim, kernel_size=1)  # equals V*x + k
+        self.softmax = nn.Softmax(dim=2)
+
+    def forward(self, x):
+        # x shape: (Batch, Channel, Time)
+        alpha = self.linear1(x)
+        alpha = self.activation(alpha)
+        alpha = self.linear2(alpha)
+        alpha = self.softmax(alpha)
+
+        mean = torch.sum(alpha * x, dim=2)
+        residuals = x - mean.unsqueeze(2)
+        # Weighted variance
+        variance = torch.sum(alpha * residuals**2, dim=2)
+        std = torch.sqrt(variance.clamp(min=1e-9))
+        
+        # Concatenate mean and std
+        return torch.cat([mean, std], dim=1)
+
 
 class Model(nn.Module):
     def __init__(self, d_args):
@@ -618,7 +509,7 @@ class Model(nn.Module):
         self.drop = nn.Dropout(0.5, inplace=True)
         self.drop_way = nn.Dropout(0.2, inplace=True)
         self.selu = nn.SELU(inplace=True)
-
+        
         self.encoder = nn.Sequential(
             nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
             nn.Sequential(Residual_block(nb_filts=filts[2])),
@@ -626,7 +517,13 @@ class Model(nn.Module):
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])))
+        # [NEW CODE START] Initialize ASP and Projections
+        self.asp_S = AttentiveStatsPool(filts[-1][-1], 128)
+        self.proj_S_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
 
+        self.asp_T = AttentiveStatsPool(filts[-1][-1], 128)
+        self.proj_T_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
+        # [NEW CODE END]
         self.pos_S = nn.Parameter(torch.randn(1, 23, filts[-1][-1]))
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
@@ -707,17 +604,35 @@ class Model(nn.Module):
         # (#bs, #filt, #spec, #seq)
         e = self.encoder(x)
 
-        # spectral GAT (GAT-S)
-        e_S, _ = torch.max(torch.abs(e), dim=3)  # max along time
-        e_S = e_S.transpose(1, 2) + self.pos_S
+        # [CORRECTED CODE COMPLETE]
+        
+        # 1. Get dimensions
+        # e shape: (Batch, Channel, n_freq, n_time)
+        B, C, n_freq, n_time = e.shape
+        
+        # --- SPECTRAL GAT BRANCH (ASP) ---
+        # Reshape to treat each frequency bin as an independent sequence of time steps
+        e_S_in = e.permute(0, 2, 1, 3).reshape(B * n_freq, C, n_time)
+        e_S_asp = self.asp_S(e_S_in)       # ASP pooling over time
+        e_S = self.proj_S_asp(e_S_asp)     # Project back to channel dim
+        e_S = e_S.view(B, n_freq, C)       # Reshape to (Batch, Nodes, Feat)
+        
+        # Add positional encoding
+        e_S = e_S + self.pos_S
 
+        # Apply GAT and Graph Pooling
         gat_S = self.GAT_layer_S(e_S)
-        out_S = self.pool_S(gat_S)  # (#bs, #node, #dim)
+        out_S = self.pool_S(gat_S)
 
-        # temporal GAT (GAT-T)
-        e_T, _ = torch.max(torch.abs(e), dim=2)  # max along freq
-        e_T = e_T.transpose(1, 2)
+        # --- TEMPORAL GAT BRANCH (ASP) ---
+        # Reshape to treat each time step as an independent sequence of frequency bins
+        e_T_in = e.permute(0, 3, 1, 2).reshape(B * n_time, C, n_freq)
+        e_T_asp = self.asp_T(e_T_in)       # ASP pooling over freq
+        e_T = self.proj_T_asp(e_T_asp)     # Project back to channel dim
+        e_T = e_T.view(B, n_time, C)       # Reshape to (Batch, Nodes, Feat)
 
+        # [MISSING PART ADDED BELOW]
+        # Apply GAT and Graph Pooling for Temporal branch
         gat_T = self.GAT_layer_T(e_T)
         out_T = self.pool_T(gat_T)
 
