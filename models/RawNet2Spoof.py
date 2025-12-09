@@ -12,29 +12,6 @@ ___author__ = "Hemlata Tak"
 __email__ = "tak@eurecom.fr"
 
 
-# NEW: MFM (MAX-FEATURE-MAP) CLASS
-class MFM(nn.Module):
-    """Max-Feature-Map activation function. 
-    Halves the channel dimension by taking the element-wise maximum of feature pairs.
-    Handles 2D (Dense), 3D (Graph), and 4D (Conv) tensors.
-    """
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x: Tensor) -> Tensor:
-        # Determine the channel dimension: 1 for 4D (Conv), last for 2D/3D (Dense/Graph)
-        channel_dim = 1 if x.dim() == 4 else (x.dim() - 1)
-        
-        size = x.size(channel_dim)
-        if size % 2 != 0:
-            raise ValueError(f"MFM input channels must be even. Got {size} in dimension {channel_dim}")
-            
-        # Split the tensor in half along the channel dimension
-        x1, x2 = torch.split(x, size // 2, dim=channel_dim)
-        
-        # Take the element-wise maximum
-        return torch.max(x1, x2)
-
 class SincConv(nn.Module):
     @staticmethod
     def to_mel(hz):
@@ -134,17 +111,17 @@ class Residual_block(nn.Module):
         if not self.first:
             self.bn1 = nn.BatchNorm1d(num_features=nb_filts[0])
 
-        # NEW CODE (Partial __init__):
-        self.mfm = MFM() # Replaced LeakyReLU
+        self.lrelu = nn.LeakyReLU(negative_slope=0.3)
+
         self.conv1 = nn.Conv1d(
             in_channels=nb_filts[0],
-            out_channels=nb_filts[1] * 2, # Doubled
+            out_channels=nb_filts[1],
             kernel_size=3,
             padding=1,
             stride=1,
         )
 
-        self.bn2 = nn.BatchNorm1d(num_features=nb_filts[1] * 2) # Doubled
+        self.bn2 = nn.BatchNorm1d(num_features=nb_filts[1])
         self.conv2 = nn.Conv1d(
             in_channels=nb_filts[1],
             out_channels=nb_filts[1],
@@ -171,13 +148,13 @@ class Residual_block(nn.Module):
         identity = x
         if not self.first:
             out = self.bn1(x)
-            out = self.mfm(out) # Replaced LeakyReLU
+            out = self.lrelu(out)
         else:
             out = x
 
         out = self.conv1(x)
         out = self.bn2(out)
-        out = self.mfm(out) # Replaced LeakyReLU
+        out = self.lrelu(out)
         out = self.conv2(out)
 
         if self.downsample:
@@ -202,7 +179,7 @@ class Model(nn.Module):
         )
 
         self.first_bn = nn.BatchNorm1d(num_features=d_args["filts"][0])
-        self.mfm = MFM() # Replaced SELU
+        self.selu = nn.SELU(inplace=True)
         self.block0 = nn.Sequential(
             Residual_block(nb_filts=d_args["filts"][1], first=True))
         self.block1 = nn.Sequential(
@@ -238,7 +215,7 @@ class Model(nn.Module):
             l_out_features=d_args["filts"][2][-1])
 
         self.bn_before_gru = nn.BatchNorm1d(
-            num_features=d_args["filts"][2][-1] * 2) # Doubled to account for MFM after x5 block
+            num_features=d_args["filts"][2][-1])
         self.gru = nn.GRU(
             input_size=d_args["filts"][2][-1],
             hidden_size=d_args["gru_node"],
@@ -267,7 +244,7 @@ class Model(nn.Module):
         x = self.Sinc_conv(x)
         x = F.max_pool1d(torch.abs(x), 3)
         x = self.first_bn(x)
-        x = self.mfm(x) # Replaced SELU
+        x = self.selu(x)
 
         x0 = self.block0(x)
         y0 = self.avgpool(x0).view(x0.size(0),
@@ -318,7 +295,7 @@ class Model(nn.Module):
         x = x5 * y5 + y5  # (batch, filter, time) x (batch, filter, 1)
 
         x = self.bn_before_gru(x)
-        x = self.mfm(x) # Replaced SELU
+        x = self.selu(x)
         x = x.permute(0, 2, 1)  # (batch, filt, time) >> (batch, time, filt)
         self.gru.flatten_parameters()
         x, _ = self.gru(x)

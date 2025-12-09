@@ -1,5 +1,5 @@
 """
-AASIST
+AASIST (with MFM integrated into Residual blocks)
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
@@ -14,50 +14,43 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-# NEW: MFM (MAX-FEATURE-MAP) CLASS
 class MFM(nn.Module):
-    """Max-Feature-Map activation function. 
-    Halves the channel dimension by taking the element-wise maximum of feature pairs.
-    Handles 2D (Dense), 3D (Graph), and 4D (Conv) tensors.
     """
-    def __init__(self):
+    Max-Feature-Map (MFM) activation.
+    Assumes channel dimension = 2 * out_channels and returns out_channels.
+    """
+    def __init__(self, out_channels: int):
         super().__init__()
+        self.out_channels = out_channels
 
     def forward(self, x: Tensor) -> Tensor:
-        # Determine the channel dimension: 1 for 4D (Conv), last for 2D/3D (Dense/Graph)
-        channel_dim = 1 if x.dim() == 4 else (x.dim() - 1)
-        
-        size = x.size(channel_dim)
-        if size % 2 != 0:
-            raise ValueError(f"MFM input channels must be even. Got {size} in dimension {channel_dim}")
-            
-        # Split the tensor in half along the channel dimension
-        x1, x2 = torch.split(x, size // 2, dim=channel_dim)
-        
-        # Take the element-wise maximum
+        # x: (B, 2*out_channels, H, W)
+        c = self.out_channels
+        x1 = x[:, :c, :, :]
+        x2 = x[:, c:, :, :]
         return torch.max(x1, x2)
+
 
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
-        # NEW CODE (Partial __init__):
         # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim * 2)
-        self.att_weight = self._init_new_params(out_dim * 2, 1)
+        self.att_proj = nn.Linear(in_dim, out_dim)
+        self.att_weight = self._init_new_params(out_dim, 1)
 
         # project
-        self.proj_with_att = nn.Linear(in_dim, out_dim * 2)
-        self.proj_without_att = nn.Linear(in_dim, out_dim * 2)
+        self.proj_with_att = nn.Linear(in_dim, out_dim)
+        self.proj_without_att = nn.Linear(in_dim, out_dim)
 
         # batch norm
-        self.bn = nn.BatchNorm1d(out_dim * 2)
+        self.bn = nn.BatchNorm1d(out_dim)
 
         # dropout for inputs
         self.input_drop = nn.Dropout(p=0.2)
 
         # activate
-        self.act = MFM()
+        self.act = nn.SELU(inplace=True)
 
         # temperature
         self.temp = 1.
@@ -142,8 +135,8 @@ class HtrgGraphAttentionLayer(nn.Module):
         self.proj_type2 = nn.Linear(in_dim, in_dim)
 
         # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim * 2)
-        self.att_projM = nn.Linear(in_dim, out_dim * 2)
+        self.att_proj = nn.Linear(in_dim, out_dim)
+        self.att_projM = nn.Linear(in_dim, out_dim)
 
         self.att_weight11 = self._init_new_params(out_dim, 1)
         self.att_weight22 = self._init_new_params(out_dim, 1)
@@ -151,20 +144,20 @@ class HtrgGraphAttentionLayer(nn.Module):
         self.att_weightM = self._init_new_params(out_dim, 1)
 
         # project
-        self.proj_with_att = nn.Linear(in_dim, out_dim * 2)
-        self.proj_without_att = nn.Linear(in_dim, out_dim * 2)
+        self.proj_with_att = nn.Linear(in_dim, out_dim)
+        self.proj_without_att = nn.Linear(in_dim, out_dim)
 
-        self.proj_with_attM = nn.Linear(in_dim, out_dim*2)
-        self.proj_without_attM = nn.Linear(in_dim, out_dim*2)
+        self.proj_with_attM = nn.Linear(in_dim, out_dim)
+        self.proj_without_attM = nn.Linear(in_dim, out_dim)
 
         # batch norm
-        self.bn = nn.BatchNorm1d(out_dim*2)
+        self.bn = nn.BatchNorm1d(out_dim)
 
         # dropout for inputs
         self.input_drop = nn.Dropout(p=0.2)
 
         # activate
-        self.act = MFM()
+        self.act = nn.SELU(inplace=True)
 
         # temperature
         self.temp = 1.
@@ -435,84 +428,92 @@ class CONV(nn.Module):
 
 
 class Residual_block(nn.Module):
+    """
+    Residual block modified to use MFM.
+
+    nb_filts is expected to be an iterable of two ints: [in_channels, out_channels]
+    External interface unchanged: nb_filts[0] = in, nb_filts[1] = out (C).
+    Internal conv shapes:
+      conv1: in -> 2*C
+      BN
+      MFM -> C
+      conv2: C -> 2*C
+      BN
+      MFM -> C
+    Identity (downsample) conv maps in -> C (so addition is done on C).
+    """
     def __init__(self, nb_filts, first=False):
         super().__init__()
         self.first = first
 
+        in_ch = nb_filts[0]
+        out_ch = nb_filts[1]  # this is C (the external expected out)
+
         if not self.first:
-            self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
-        self.conv1 = nn.Conv2d(in_channels=nb_filts[0],
-                               out_channels=nb_filts[1] * 2, # Doubled
+            # BN on input (same as original)
+            self.bn1 = nn.BatchNorm2d(num_features=in_ch)
+
+        # conv1: in_ch -> 2*out_ch
+        self.conv1 = nn.Conv2d(in_channels=in_ch,
+                               out_channels=out_ch * 2,
                                kernel_size=(2, 3),
                                padding=(1, 1),
                                stride=1)
-        self.mfm = MFM()
 
-        self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1] * 2) # Doubled
-        self.conv2 = nn.Conv2d(in_channels=nb_filts[1],
-                               out_channels=nb_filts[1],
+        # BN after conv1 (on 2*C channels)
+        self.bn_after_conv1 = nn.BatchNorm2d(num_features=out_ch * 2)
+        # MFM reducing 2*C -> C
+        self.mfm1 = MFM(out_ch)
+
+        # conv2: C -> 2*C
+        self.conv2 = nn.Conv2d(in_channels=out_ch,
+                               out_channels=out_ch * 2,
                                kernel_size=(2, 3),
                                padding=(0, 1),
                                stride=1)
 
-        if nb_filts[0] != nb_filts[1]:
+        # BN after conv2 (on 2*C channels)
+        self.bn_after_conv2 = nn.BatchNorm2d(num_features=out_ch * 2)
+        # MFM reducing 2*C -> C
+        self.mfm2 = MFM(out_ch)
+
+        if in_ch != out_ch:
             self.downsample = True
-            self.conv_downsample = nn.Conv2d(in_channels=nb_filts[0],
-                                             out_channels=nb_filts[1],
+            # conv_downsample will map identity to out_ch (C) to match out after MFM
+            self.conv_downsample = nn.Conv2d(in_channels=in_ch,
+                                             out_channels=out_ch,
                                              padding=(0, 1),
                                              kernel_size=(1, 3),
                                              stride=1)
-
         else:
             self.downsample = False
-        self.mp = nn.MaxPool2d((1, 3))  # self.mp = nn.MaxPool2d((1,4))
+
+        self.mp = nn.MaxPool2d((1, 3))  # same as original
 
     def forward(self, x):
         identity = x
+
         if not self.first:
             out = self.bn1(x)
-            out = self.selu(out)
         else:
             out = x
-        out = self.conv1(x)
 
-        # print('out',out.shape)
-        out = self.bn2(out)
-        out = self.mfm(out) # Replaced SELU
-        # print('out',out.shape)
-        out = self.conv2(out)
-        #print('conv2 out',out.shape)
+        # conv1 -> BN -> MFM
+        out = self.conv1(out)              # -> 2*C
+        out = self.bn_after_conv1(out)
+        out = self.mfm1(out)               # -> C
+
+        # conv2 -> BN -> MFM
+        out = self.conv2(out)              # expects C in -> outputs 2*C
+        out = self.bn_after_conv2(out)
+        out = self.mfm2(out)               # -> C
+
         if self.downsample:
-            identity = self.conv_downsample(identity)
+            identity = self.conv_downsample(identity)  # -> C
 
-        out += identity
+        out = out + identity
         out = self.mp(out)
         return out
-
-class AttentiveStatsPool(nn.Module):
-    def __init__(self, in_dim, bottleneck_dim=128):
-        super().__init__()
-        # Attention mechanism
-        self.linear1 = nn.Conv1d(in_dim, bottleneck_dim, kernel_size=1)  # equals W*x + b
-        self.activation = nn.Tanh()
-        self.linear2 = nn.Conv1d(bottleneck_dim, in_dim, kernel_size=1)  # equals V*x + k
-        self.softmax = nn.Softmax(dim=2)
-
-    def forward(self, x):
-        # x shape: (Batch, Channel, Time)
-        alpha = self.linear1(x)
-        alpha = self.activation(alpha)
-        alpha = self.linear2(alpha)
-        alpha = self.softmax(alpha)
-
-        mean = torch.sum(alpha * x, dim=2)
-        residuals = x - mean.unsqueeze(2)
-        # Weighted variance
-        variance = torch.sum(alpha * residuals**2, dim=2)
-        std = torch.sqrt(variance.clamp(min=1e-9))
-        
-        # Concatenate mean and std
-        return torch.cat([mean, std], dim=1)
 
 
 class Model(nn.Module):
@@ -530,15 +531,10 @@ class Model(nn.Module):
                               in_channels=1)
         self.first_bn = nn.BatchNorm2d(num_features=1)
 
-        # NEW CODE:
         self.drop = nn.Dropout(0.5, inplace=True)
         self.drop_way = nn.Dropout(0.2, inplace=True)
-        
-        # NEW: 1x1 Conv to map 1 channel to 2 channels
-        self.conv1x1_to_2chan = nn.Conv2d(1, 2, kernel_size=1)
-        self.mfm_initial = MFM() # MFM for the initial layer
-        self.mfm_deep = MFM() # MFM for the final dense layers
-        
+        self.selu = nn.SELU(inplace=True)
+
         self.encoder = nn.Sequential(
             nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
             nn.Sequential(Residual_block(nb_filts=filts[2])),
@@ -546,13 +542,7 @@ class Model(nn.Module):
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])))
-        # [NEW CODE START] Initialize ASP and Projections
-        self.asp_S = AttentiveStatsPool(filts[-1][-1], 128)
-        self.proj_S_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
 
-        self.asp_T = AttentiveStatsPool(filts[-1][-1], 128)
-        self.proj_T_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
-        # [NEW CODE END]
         self.pos_S = nn.Parameter(torch.randn(1, 23, filts[-1][-1]))
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
@@ -583,93 +573,32 @@ class Model(nn.Module):
         self.pool_hS2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
         self.pool_hT2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
 
-        # ---------------------------------------------------------------------
-        # MODIFICATION: Increased dense layers from 1 to 5
-        # ---------------------------------------------------------------------
-        
-        # Calculate input dimension (5 concatenated features)
-        in_dim = 5 * gat_dims[1]
-        
-        # Define hidden dimension size. 
-        # You can keep it same as in_dim or set a fixed number (e.g., 128)
-        hidden_dim = in_dim 
-
-        # NEW CODE (Model.__init__ - Final Dense Layer):
-        # ... (calculate in_dim)
-        hidden_dim = in_dim 
-        mfm_hidden_dim = hidden_dim * 2 # Required output channels before MFM
-
-        self.out_layer = nn.Sequential(
-            # Layer 1: Input -> Hidden
-            nn.Linear(in_dim, mfm_hidden_dim),
-            self.mfm_deep, # <--- Updated instance
-            nn.Dropout(0.3),
-            
-            # Layer 2: Hidden -> Hidden
-            nn.Linear(hidden_dim, mfm_hidden_dim),
-            self.mfm_deep, # <--- Updated instance
-            nn.Dropout(0.3),
-            
-            # Layer 3: Hidden -> Hidden
-            nn.Linear(hidden_dim, mfm_hidden_dim),
-            self.mfm_deep, # <--- Updated instance
-            nn.Dropout(0.3),
-            
-            # Layer 4: Hidden -> Hidden
-            nn.Linear(hidden_dim, mfm_hidden_dim),
-            self.mfm_deep, # <--- Updated instance
-            nn.Dropout(0.3),
-            
-            # Layer 5: Hidden -> Output (2 classes)
-            nn.Linear(hidden_dim, 2) # Final output layer remains D->2, no MFM
-        )
+        self.out_layer = nn.Linear(5 * gat_dims[1], 2)
 
     def forward(self, x, Freq_aug=False):
 
         x = x.unsqueeze(1)
         x = self.conv_time(x, mask=Freq_aug)
         x = x.unsqueeze(dim=1)
-        # NEW CODE:
         x = F.max_pool2d(torch.abs(x), (3, 3))
         x = self.first_bn(x)
-        
-        # NEW FIX: Convert to 2 channels, then apply MFM (2->1)
-        x = self.conv1x1_to_2chan(x)
-        x = self.mfm_initial(x) # <-- MFM is now used!
+        x = self.selu(x)
 
         # get embeddings using encoder
         # (#bs, #filt, #spec, #seq)
         e = self.encoder(x)
 
-        # [CORRECTED CODE COMPLETE]
-        
-        # 1. Get dimensions
-        # e shape: (Batch, Channel, n_freq, n_time)
-        B, C, n_freq, n_time = e.shape
-        
-        # --- SPECTRAL GAT BRANCH (ASP) ---
-        # Reshape to treat each frequency bin as an independent sequence of time steps
-        e_S_in = e.permute(0, 2, 1, 3).reshape(B * n_freq, C, n_time)
-        e_S_asp = self.asp_S(e_S_in)       # ASP pooling over time
-        e_S = self.proj_S_asp(e_S_asp)     # Project back to channel dim
-        e_S = e_S.view(B, n_freq, C)       # Reshape to (Batch, Nodes, Feat)
-        
-        # Add positional encoding
-        e_S = e_S + self.pos_S
+        # spectral GAT (GAT-S)
+        e_S, _ = torch.max(torch.abs(e), dim=3)  # max along time
+        e_S = e_S.transpose(1, 2) + self.pos_S
 
-        # Apply GAT and Graph Pooling
         gat_S = self.GAT_layer_S(e_S)
-        out_S = self.pool_S(gat_S)
+        out_S = self.pool_S(gat_S)  # (#bs, #node, #dim)
 
-        # --- TEMPORAL GAT BRANCH (ASP) ---
-        # Reshape to treat each time step as an independent sequence of frequency bins
-        e_T_in = e.permute(0, 3, 1, 2).reshape(B * n_time, C, n_freq)
-        e_T_asp = self.asp_T(e_T_in)       # ASP pooling over freq
-        e_T = self.proj_T_asp(e_T_asp)     # Project back to channel dim
-        e_T = e_T.view(B, n_time, C)       # Reshape to (Batch, Nodes, Feat)
+        # temporal GAT (GAT-T)
+        e_T, _ = torch.max(torch.abs(e), dim=2)  # max along freq
+        e_T = e_T.transpose(1, 2)
 
-        # [MISSING PART ADDED BELOW]
-        # Apply GAT and Graph Pooling for Temporal branch
         gat_T = self.GAT_layer_T(e_T)
         out_T = self.pool_T(gat_T)
 
