@@ -7,12 +7,35 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+# NEW: MFM (MAX-FEATURE-MAP) CLASS
+class MFM(nn.Module):
+    """Max-Feature-Map activation function. 
+    Halves the channel dimension by taking the element-wise maximum of feature pairs.
+    Handles 2D (Dense), 3D (Graph), and 4D (Conv) tensors.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor) -> Tensor:
+        # Determine the channel dimension: 1 for 4D (Conv), last for 2D/3D (Dense/Graph)
+        channel_dim = 1 if x.dim() == 4 else (x.dim() - 1)
+        
+        size = x.size(channel_dim)
+        if size % 2 != 0:
+            raise ValueError(f"MFM input channels must be even. Got {size} in dimension {channel_dim}")
+            
+        # Split the tensor in half along the channel dimension
+        x1, x2 = torch.split(x, size // 2, dim=channel_dim)
+        
+        # Take the element-wise maximum
+        return torch.max(x1, x2)
+
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
         # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim)
+        self.att_proj = nn.Linear(in_dim, out_dim *2)
         self.att_weight = self._init_new_params(out_dim, 1)
 
         # project
@@ -20,13 +43,13 @@ class GraphAttentionLayer(nn.Module):
         self.proj_without_att = nn.Linear(in_dim, out_dim)
 
         # batch norm
-        self.bn = nn.BatchNorm1d(out_dim)
+        self.bn = nn.BatchNorm1d(out_dim * 2)
 
         # dropout for inputs
         self.input_drop = nn.Dropout(p=0.2)
 
         # activate
-        self.act = nn.SELU(inplace=True)
+        self.act = MFM()
 
     def forward(self, x):
         '''
@@ -230,13 +253,13 @@ class Residual_block(nn.Module):
         if not self.first:
             self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
         self.conv1 = nn.Conv2d(in_channels=nb_filts[0],
-                               out_channels=nb_filts[1],
+                               out_channels=nb_filts[1] * 2, # Doubled
                                kernel_size=(2, 3),
                                padding=(1, 1),
                                stride=1)
-        self.selu = nn.SELU(inplace=True)
+        self.mfm = MFM()
 
-        self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1])
+        self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1] * 2) # Doubled
         self.conv2 = nn.Conv2d(in_channels=nb_filts[1],
                                out_channels=nb_filts[1],
                                kernel_size=(2, 3),
@@ -258,8 +281,8 @@ class Residual_block(nn.Module):
     def forward(self, x):
         identity = x
         if not self.first:
-            out = self.bn1(x)
-            out = self.selu(out)
+            out = self.bn2(out)
+            out = self.mfm(out) # Replaced SELU
         else:
             out = x
         out = self.conv1(x)
@@ -332,7 +355,7 @@ class Model(nn.Module):
         x = F.max_pool2d(torch.abs(x), (3, 3))
 
         x = self.first_bn(x)
-        x = self.selu(x)
+        x = self.mfm(x) # Replaced SELU
 
         e_T = self.encoder_T(x)  # (#bs, #filt, #spec, #seq)
         e_T, _ = torch.max(torch.abs(e_T), dim=3)  # max along time

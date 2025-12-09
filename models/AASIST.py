@@ -14,26 +14,50 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+# NEW: MFM (MAX-FEATURE-MAP) CLASS
+class MFM(nn.Module):
+    """Max-Feature-Map activation function. 
+    Halves the channel dimension by taking the element-wise maximum of feature pairs.
+    Handles 2D (Dense), 3D (Graph), and 4D (Conv) tensors.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: Tensor) -> Tensor:
+        # Determine the channel dimension: 1 for 4D (Conv), last for 2D/3D (Dense/Graph)
+        channel_dim = 1 if x.dim() == 4 else (x.dim() - 1)
+        
+        size = x.size(channel_dim)
+        if size % 2 != 0:
+            raise ValueError(f"MFM input channels must be even. Got {size} in dimension {channel_dim}")
+            
+        # Split the tensor in half along the channel dimension
+        x1, x2 = torch.split(x, size // 2, dim=channel_dim)
+        
+        # Take the element-wise maximum
+        return torch.max(x1, x2)
+
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_dim, out_dim, **kwargs):
         super().__init__()
 
+        # NEW CODE (Partial __init__):
         # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim)
-        self.att_weight = self._init_new_params(out_dim, 1)
+        self.att_proj = nn.Linear(in_dim, out_dim * 2)
+        self.att_weight = self._init_new_params(out_dim * 2, 1)
 
         # project
-        self.proj_with_att = nn.Linear(in_dim, out_dim)
-        self.proj_without_att = nn.Linear(in_dim, out_dim)
+        self.proj_with_att = nn.Linear(in_dim, out_dim * 2)
+        self.proj_without_att = nn.Linear(in_dim, out_dim * 2)
 
         # batch norm
-        self.bn = nn.BatchNorm1d(out_dim)
+        self.bn = nn.BatchNorm1d(out_dim * 2)
 
         # dropout for inputs
         self.input_drop = nn.Dropout(p=0.2)
 
         # activate
-        self.act = nn.SELU(inplace=True)
+        self.act = MFM()
 
         # temperature
         self.temp = 1.
@@ -118,8 +142,8 @@ class HtrgGraphAttentionLayer(nn.Module):
         self.proj_type2 = nn.Linear(in_dim, in_dim)
 
         # attention map
-        self.att_proj = nn.Linear(in_dim, out_dim)
-        self.att_projM = nn.Linear(in_dim, out_dim)
+        self.att_proj = nn.Linear(in_dim, out_dim * 2)
+        self.att_projM = nn.Linear(in_dim, out_dim * 2)
 
         self.att_weight11 = self._init_new_params(out_dim, 1)
         self.att_weight22 = self._init_new_params(out_dim, 1)
@@ -127,20 +151,20 @@ class HtrgGraphAttentionLayer(nn.Module):
         self.att_weightM = self._init_new_params(out_dim, 1)
 
         # project
-        self.proj_with_att = nn.Linear(in_dim, out_dim)
-        self.proj_without_att = nn.Linear(in_dim, out_dim)
+        self.proj_with_att = nn.Linear(in_dim, out_dim * 2)
+        self.proj_without_att = nn.Linear(in_dim, out_dim * 2)
 
-        self.proj_with_attM = nn.Linear(in_dim, out_dim)
-        self.proj_without_attM = nn.Linear(in_dim, out_dim)
+        self.proj_with_attM = nn.Linear(in_dim, out_dim*2)
+        self.proj_without_attM = nn.Linear(in_dim, out_dim*2)
 
         # batch norm
-        self.bn = nn.BatchNorm1d(out_dim)
+        self.bn = nn.BatchNorm1d(out_dim*2)
 
         # dropout for inputs
         self.input_drop = nn.Dropout(p=0.2)
 
         # activate
-        self.act = nn.SELU(inplace=True)
+        self.act = MFM()
 
         # temperature
         self.temp = 1.
@@ -418,13 +442,13 @@ class Residual_block(nn.Module):
         if not self.first:
             self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
         self.conv1 = nn.Conv2d(in_channels=nb_filts[0],
-                               out_channels=nb_filts[1],
+                               out_channels=nb_filts[1] * 2, # Doubled
                                kernel_size=(2, 3),
                                padding=(1, 1),
                                stride=1)
-        self.selu = nn.SELU(inplace=True)
+        self.mfm = MFM()
 
-        self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1])
+        self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1] * 2) # Doubled
         self.conv2 = nn.Conv2d(in_channels=nb_filts[1],
                                out_channels=nb_filts[1],
                                kernel_size=(2, 3),
@@ -454,7 +478,7 @@ class Residual_block(nn.Module):
 
         # print('out',out.shape)
         out = self.bn2(out)
-        out = self.selu(out)
+        out = self.mfm(out) # Replaced SELU
         # print('out',out.shape)
         out = self.conv2(out)
         #print('conv2 out',out.shape)
@@ -506,9 +530,10 @@ class Model(nn.Module):
                               in_channels=1)
         self.first_bn = nn.BatchNorm2d(num_features=1)
 
+        # NEW CODE (__init__ - Model activation):
         self.drop = nn.Dropout(0.5, inplace=True)
         self.drop_way = nn.Dropout(0.2, inplace=True)
-        self.selu = nn.SELU(inplace=True)
+        self.mfm = MFM() # Replaced SELU
         
         self.encoder = nn.Sequential(
             nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
@@ -565,31 +590,35 @@ class Model(nn.Module):
         # You can keep it same as in_dim or set a fixed number (e.g., 128)
         hidden_dim = in_dim 
 
+        # NEW CODE (Model.__init__ - Final Dense Layer):
+        # ... (calculate in_dim)
+        hidden_dim = in_dim 
+        mfm_hidden_dim = hidden_dim * 2 # Required output channels before MFM
+
         self.out_layer = nn.Sequential(
-            # Layer 1: Input -> Hidden
-            nn.Linear(in_dim, hidden_dim),
-            nn.SELU(inplace=True),
+            # Layer 1: Input -> Hidden (Linear layer outputs 2*H)
+            nn.Linear(in_dim, mfm_hidden_dim),
+            self.mfm, # Replaced SELU
             nn.Dropout(0.3),
             
-            # Layer 2: Hidden -> Hidden
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SELU(inplace=True),
+            # Layer 2: Hidden -> Hidden (Input is H, Linear outputs 2*H)
+            nn.Linear(hidden_dim, mfm_hidden_dim),
+            self.mfm, # Replaced SELU
             nn.Dropout(0.3),
             
             # Layer 3: Hidden -> Hidden
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SELU(inplace=True),
+            nn.Linear(hidden_dim, mfm_hidden_dim),
+            self.mfm, # Replaced SELU
             nn.Dropout(0.3),
             
             # Layer 4: Hidden -> Hidden
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SELU(inplace=True),
+            nn.Linear(hidden_dim, mfm_hidden_dim),
+            self.mfm, # Replaced SELU
             nn.Dropout(0.3),
             
             # Layer 5: Hidden -> Output (2 classes)
-            nn.Linear(hidden_dim, 2)
+            nn.Linear(hidden_dim, 2) # Final output layer remains D->2, no MFM
         )
-        # ---------------------------------------------------------------------
 
     def forward(self, x, Freq_aug=False):
 
@@ -597,8 +626,9 @@ class Model(nn.Module):
         x = self.conv_time(x, mask=Freq_aug)
         x = x.unsqueeze(dim=1)
         x = F.max_pool2d(torch.abs(x), (3, 3))
+        # NEW CODE (forward - applying initial activation):
         x = self.first_bn(x)
-        x = self.selu(x)
+        x = self.mfm(x) # Replaced SELU
 
         # get embeddings using encoder
         # (#bs, #filt, #spec, #seq)
