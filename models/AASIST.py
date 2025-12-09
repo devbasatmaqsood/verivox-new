@@ -14,20 +14,26 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+# File: models/AASIST.py
 class MFM(nn.Module):
-    """
-    Max-Feature-Map (MFM) activation.
-    Assumes channel dimension = 2 * out_channels and returns out_channels.
-    """
-    def __init__(self, out_channels: int):
-        super().__init__()
-        self.out_channels = out_channels
+    # ... (other MFM code)
 
     def forward(self, x: Tensor) -> Tensor:
-        # x: (B, 2*out_channels, H, W)
+        # x: (B, 2*out_channels, H, W) or (B, 2*out_channels)
         c = self.out_channels
-        x1 = x[:, :c, :, :]
-        x2 = x[:, c:, :, :]
+        
+        # Check the dimension of the input tensor
+        if len(x.shape) == 4:
+            # 4D input: Convolutional output (B, 2*C, H, W)
+            x1 = x[:, :c, :, :]
+            x2 = x[:, c:, :, :]
+        elif len(x.shape) == 2:
+            # 2D input: Linear output (B, 2*C)
+            x1 = x[:, :c]
+            x2 = x[:, c:]
+        else:
+            raise ValueError(f"MFM received input with {len(x.shape)} dimensions, expected 2 or 4.")
+            
         return torch.max(x1, x2)
 
 
