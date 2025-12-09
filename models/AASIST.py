@@ -15,11 +15,19 @@ from torch import Tensor
 
 
 # File: models/AASIST.py
+
 class MFM(nn.Module):
-    # ... (other MFM code)
+    """
+    Max-Feature-Map (MFM) activation.
+    Assumes channel dimension = 2 * out_channels and returns out_channels.
+    """
+    # FIX: Ensure 'out_channels' is an explicit positional argument
+    def __init__(self, out_channels: int):
+        super().__init__()
+        self.out_channels = out_channels
 
     def forward(self, x: Tensor) -> Tensor:
-        # x: (B, 2*out_channels, H, W) or (B, 2*out_channels)
+        # ... (Your previous fix for 4D/2D slicing should be here)
         c = self.out_channels
         
         # Check the dimension of the input tensor
