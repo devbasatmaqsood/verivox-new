@@ -2,6 +2,7 @@ import os
 import numpy as np
 import soundfile as sf
 import torch
+import torchaudio 
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -120,15 +121,20 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
             dummy_x = Tensor(np.zeros(self.cut))
             return dummy_x, key
 
-        # Case 2: File exists but might be corrupt
+        # Case 2: File exists, try reading with Torchaudio (more robust)
         try:
-            X, _ = sf.read(str(filepath))
+            # TORCHAUDIO CHANGE: Load with torchaudio instead of soundfile
+            waveform, sample_rate = torchaudio.load(str(filepath))
+            
+            # torchaudio returns shape (Channels, Time), e.g., (1, 64000)
+            # We need (Time,) for the existing pad function, so we squeeze it.
+            X = waveform.squeeze(0).numpy()
+            
             X_pad = pad(X, self.cut)
             x_inp = Tensor(X_pad)
             return x_inp, key
             
         except Exception as e:
-            # This catches the 'unknown error in flac decoder'
             print(f"WARNING: Corrupt file detected at {filepath}")
             print(f"Error details: {e}")
             
