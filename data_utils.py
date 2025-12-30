@@ -9,7 +9,6 @@ __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
 
 
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
-
     d_meta = {}
     file_list = []
     with open(dir_meta, "r") as f:
@@ -17,20 +16,25 @@ def genSpoof_list(dir_meta, is_train=False, is_eval=False):
 
     if is_train:
         for line in l_meta:
-            _, key, _, _, label = line.strip().split(" ")
+            parts = line.strip().split(" ")
+            key = parts[1]
+            label = parts[-1]  # Robust: grabs last column (bonafide/spoof)
             file_list.append(key)
             d_meta[key] = 1 if label == "bonafide" else 0
         return d_meta, file_list
 
     elif is_eval:
         for line in l_meta:
-            _, key, _, _, _ = line.strip().split(" ")
-            #key = line.strip()
+            parts = line.strip().split(" ")
+            key = parts[1]
             file_list.append(key)
         return file_list
     else:
+        # Development / Validation set
         for line in l_meta:
-            _, key, _, _, label = line.strip().split(" ")
+            parts = line.strip().split(" ")
+            key = parts[1]
+            label = parts[-1]
             file_list.append(key)
             d_meta[key] = 1 if label == "bonafide" else 0
         return d_meta, file_list

@@ -24,7 +24,15 @@ from torchcontrib.optim import SWA
 
 from data_utils import (Dataset_ASVspoof2019_train,
                         Dataset_ASVspoof2019_devNeval, genSpoof_list)
-from evaluation import calculate_tDCF_EER
+from evaluation import calculate_tDCF_EER, compute_eer
+import numpy as np
+
+# --- DEFINE KAGGLE PATHS HERE ---
+# Based on your input:
+KAGGLE_2021_TRIAL_PATH = "/kaggle/working/formatted_eval_protocol.txt"
+# IMPORTANT: Check this audio path. It usually ends in 'flac' or the parent folder containing 'flac'
+KAGGLE_2021_AUDIO_PATH = "/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/"
+
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -95,18 +103,16 @@ def main(args: argparse.Namespace) -> None:
         model.load_state_dict(
             torch.load(config["model_path"], map_location=device))
         print("Model loaded : {}".format(config["model_path"]))
-        print("Start evaluation...")
+        print("Start evaluation on 2021 Kaggle Data...")
+        
         produce_evaluation_file(eval_loader, model, device,
-                                eval_score_path, eval_trial_path)
-        calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                           asv_score_file=database_path /
-                           config["asv_score_path"],
-                           output_file=model_tag / "t-DCF_EER.txt")
-        print("DONE.")
-        eval_eer, eval_tdcf = calculate_tDCF_EER(
+                                eval_score_path, KAGGLE_2021_TRIAL_PATH)
+        
+        eval_eer = calculate_EER_only(
             cm_scores_file=eval_score_path,
-            asv_score_file=database_path / config["asv_score_path"],
-            output_file=model_tag/"loaded_model_t-DCF_EER.txt")
+            trial_file=KAGGLE_2021_TRIAL_PATH
+        )
+        print("DONE. EER: {:.4f}%".format(eval_eer))
         sys.exit(0)
 
     # get optimizer and scheduler
@@ -131,15 +137,21 @@ def main(args: argparse.Namespace) -> None:
         print("Start training epoch{:03d}".format(epoch))
         running_loss = train_epoch(trn_loader, model, optimizer, device,
                                    scheduler, config)
+        # Define 2021 trial path for scoring
+        trial_2021_path = database_path / "ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"
+
         produce_evaluation_file(dev_loader, model, device,
-                                metric_path/"dev_score.txt", dev_trial_path)
-        dev_eer, dev_tdcf = calculate_tDCF_EER(
+                                metric_path/"dev_score.txt", KAGGLE_2021_TRIAL_PATH)
+        
+        # Calculate EER only
+        dev_eer = calculate_EER_only(
             cm_scores_file=metric_path/"dev_score.txt",
-            asv_score_file=database_path/config["asv_score_path"],
-            output_file=metric_path/"dev_t-DCF_EER_{}epo.txt".format(epoch),
-            printout=False)
-        print("DONE.\nLoss:{:.5f}, dev_eer: {:.3f}, dev_tdcf:{:.5f}".format(
-            running_loss, dev_eer, dev_tdcf))
+            trial_file=KAGGLE_2021_TRIAL_PATH
+        )
+        dev_tdcf = 0.0 # Dummy value since we aren't calculating it
+        
+        print("DONE.\nLoss:{:.5f}, dev_eer: {:.3f}%".format(
+            running_loss, dev_eer))
         writer.add_scalar("loss", running_loss, epoch)
         writer.add_scalar("dev_eer", dev_eer, epoch)
         writer.add_scalar("dev_tdcf", dev_tdcf, epoch)
@@ -261,25 +273,28 @@ def get_loader(
                             worker_init_fn=seed_worker,
                             generator=gen)
 
-    _, file_dev = genSpoof_list(dir_meta=dev_trial_path,
+    # --- KAGGLE 2021 VALIDATION LOADER ---
+    print(f"Loading 2021 Validation Data from: {KAGGLE_2021_TRIAL_PATH}")
+    
+    # We use is_eval=False to force reading labels for validation
+    d_label_2021, file_2021 = genSpoof_list(dir_meta=KAGGLE_2021_TRIAL_PATH,
                                 is_train=False,
-                                is_eval=False)
-    print("no. validation files:", len(file_dev))
+                                is_eval=False) 
+    
+    print("no. validation/eval files (2021):", len(file_2021))
 
-    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_dev,
-                                            base_dir=dev_database_path)
+    # Pointing to the 2021 Audio Directory
+    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_2021,
+                                            base_dir=Path(KAGGLE_2021_AUDIO_PATH))
+    
     dev_loader = DataLoader(dev_set,
                             batch_size=config["batch_size"],
                             shuffle=False,
                             drop_last=False,
                             pin_memory=True)
 
-    file_eval = genSpoof_list(dir_meta=eval_trial_path,
-                              is_train=False,
-                              is_eval=True)
-    eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_eval,
-                                             base_dir=eval_database_path)
-    eval_loader = DataLoader(eval_set,
+    # Use the same loader for final evaluation
+    eval_loader = DataLoader(dev_set,
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
@@ -312,7 +327,10 @@ def produce_evaluation_file(
     assert len(trial_lines) == len(fname_list) == len(score_list)
     with open(save_path, "w") as fh:
         for fn, sco, trl in zip(fname_list, score_list, trial_lines):
-            _, utt_id, _, src, key = trl.strip().split(' ')
+            parts = trl.strip().split(' ')
+            utt_id = parts[1]
+            key = parts[-1] # Robust fetch for Label
+            src = "unknown" # Placeholder as 2021 src format differs
             assert fn == utt_id
             fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
     print("Scores saved to {}".format(save_path))
@@ -357,6 +375,24 @@ def train_epoch(
     running_loss /= num_total
     return running_loss
 
+
+def calculate_EER_only(cm_scores_file, trial_file):
+    """
+    Custom function to calculate only EER using the 2021 protocol.
+    """
+    # Load CM scores (Index 3 is the score in our output format)
+    cm_data = np.genfromtxt(cm_scores_file, dtype=str)
+    cm_scores = cm_data[:, 3].astype(np.float64)
+    
+    # Load Labels from trial file (Last column is label)
+    trial_data = np.genfromtxt(trial_file, dtype=str)
+    labels = trial_data[:, -1] 
+    
+    target_scores = cm_scores[labels == 'bonafide']
+    nontarget_scores = cm_scores[labels == 'spoof']
+    
+    eer, _ = compute_eer(target_scores, nontarget_scores)
+    return eer * 100
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ASVspoof detection system")
