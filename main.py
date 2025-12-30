@@ -31,7 +31,7 @@ import numpy as np
 # Based on your input:
 KAGGLE_2021_TRIAL_PATH = "/kaggle/working/formatted_eval_protocol.txt"
 # IMPORTANT: Check this audio path. It usually ends in 'flac' or the parent folder containing 'flac'
-KAGGLE_2021_AUDIO_PATH = "/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/"
+KAGGLE_2021_AUDIO_PATH = "/kaggle/input/avsspoof-2021/ASVspoof2021_LA_eval/ASVspoof2021_LA_eval/"
 
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 
