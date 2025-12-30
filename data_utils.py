@@ -101,25 +101,37 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
         
         # Define all possible paths to check
         paths_to_check = [
-            self.base_dir / f"flac/{key}.flac",                       # Standard
-            self.base_dir / f"{key}.flac",                            # Flat
-            self.base_dir / f"ASVspoof2021_LA_eval/flac/{key}.flac",  # Nested (Your probable issue)
-            self.base_dir / f"ASVspoof2021_LA_eval/{key}.flac"        # Nested Flat
+            self.base_dir / f"flac/{key}.flac",                       
+            self.base_dir / f"{key}.flac",                            
+            self.base_dir / f"ASVspoof2021_LA_eval/flac/{key}.flac",  
+            self.base_dir / f"ASVspoof2021_LA_eval/{key}.flac"       
         ]
         
         filepath = None
         for p in paths_to_check:
-            if os.path.exists(p):
+            # Check if it is a file (not a directory)
+            if os.path.isfile(p): 
                 filepath = p
                 break
         
+        # Case 1: File not found at all
         if filepath is None:
-             # This print helps you see exactly where it looked!
-            print(f"FAILED TO FIND: {key}")
-            print(f"Checked paths: {paths_to_check}")
-            raise FileNotFoundError(f"Audio file for key '{key}' not found.")
+            print(f"WARNING: File missing for key '{key}'. Returning silence.")
+            dummy_x = Tensor(np.zeros(self.cut))
+            return dummy_x, key
 
-        X, _ = sf.read(str(filepath))
-        X_pad = pad(X, self.cut)
-        x_inp = Tensor(X_pad)
-        return x_inp, key
+        # Case 2: File exists but might be corrupt
+        try:
+            X, _ = sf.read(str(filepath))
+            X_pad = pad(X, self.cut)
+            x_inp = Tensor(X_pad)
+            return x_inp, key
+            
+        except Exception as e:
+            # This catches the 'unknown error in flac decoder'
+            print(f"WARNING: Corrupt file detected at {filepath}")
+            print(f"Error details: {e}")
+            
+            # Return silent dummy audio so training doesn't crash
+            dummy_x = Tensor(np.zeros(self.cut))
+            return dummy_x, key
