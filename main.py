@@ -241,20 +241,13 @@ def get_loader(
     prefix_2019 = "ASVspoof2019.{}".format(track)
 
     trn_database_path = database_path / "ASVspoof2019_{}_train/".format(track)
-    dev_database_path = database_path / "ASVspoof2019_{}_dev/".format(track)
-    eval_database_path = database_path / "ASVspoof2019_{}_eval/".format(track)
-
+    
+    # 2019 Training Protocol
     trn_list_path = (database_path /
                      "ASVspoof2019_{}_cm_protocols/{}.cm.train.trn.txt".format(
                          track, prefix_2019))
-    dev_trial_path = (database_path /
-                      "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
-                          track, prefix_2019))
-    eval_trial_path = (
-        database_path /
-        "ASVspoof2019_{}_cm_protocols/{}.cm.eval.trl.txt".format(
-            track, prefix_2019))
-
+    
+    # --- TRAIN LOADER ---
     d_label_trn, file_train = genSpoof_list(dir_meta=trn_list_path,
                                             is_train=True,
                                             is_eval=False)
@@ -265,40 +258,58 @@ def get_loader(
                                            base_dir=trn_database_path)
     gen = torch.Generator()
     gen.manual_seed(seed)
+    
+    # OPTIMIZATION 1: Added num_workers=4
     trn_loader = DataLoader(train_set,
                             batch_size=config["batch_size"],
                             shuffle=True,
                             drop_last=True,
                             pin_memory=True,
                             worker_init_fn=seed_worker,
-                            generator=gen)
+                            generator=gen,
+                            num_workers=4) 
 
     # --- KAGGLE 2021 VALIDATION LOADER ---
     print(f"Loading 2021 Validation Data from: {KAGGLE_2021_TRIAL_PATH}")
     
-    # We use is_eval=False to force reading labels for validation
+    # Load the FULL list of 2021 files
     d_label_2021, file_2021 = genSpoof_list(dir_meta=KAGGLE_2021_TRIAL_PATH,
                                 is_train=False,
                                 is_eval=False) 
     
-    print("no. validation/eval files (2021):", len(file_2021))
+    print("Total 2021 files available:", len(file_2021))
 
-    # Pointing to the 2021 Audio Directory
-    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_2021,
+    # OPTIMIZATION 2: Create a small subset for quick validation
+    # We use the first 6000 files for the epoch-by-epoch check.
+    # This makes the "Dev" step ~30x faster.
+    dev_subset_files = file_2021[:6000] 
+    eval_all_files = file_2021 # Keep all files for the final check
+
+    print(f"Subset for Dev (Epoch-check): {len(dev_subset_files)}")
+    print(f"Full set for Final Eval: {len(eval_all_files)}")
+
+    # Create two separate datasets
+    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=dev_subset_files,
                                             base_dir=Path(KAGGLE_2021_AUDIO_PATH))
     
+    eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=eval_all_files,
+                                            base_dir=Path(KAGGLE_2021_AUDIO_PATH))
+    
+    # Dev Loader (Fast - used inside the training loop)
     dev_loader = DataLoader(dev_set,
                             batch_size=config["batch_size"],
                             shuffle=False,
                             drop_last=False,
-                            pin_memory=True)
+                            pin_memory=True,
+                            num_workers=4)
 
-    # Use the same loader for final evaluation
-    eval_loader = DataLoader(dev_set,
+    # Eval Loader (Full - used at the very end)
+    eval_loader = DataLoader(eval_set,
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
-                             pin_memory=True)
+                             pin_memory=True,
+                             num_workers=4)
 
     return trn_loader, dev_loader, eval_loader
 
