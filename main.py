@@ -233,54 +233,72 @@ def get_model(model_config: Dict, device: torch.device):
 
 
 def get_loader(
-        # --- DEV & EVAL: ASVspoof 2021 ---
-    # We point both Dev and Eval to the 2021 Evaluation set
-    eval_2021_database_path = database_path / "ASVspoof2021_LA_eval/"
-    eval_2021_list_path = Path(KAGGLE_2021_TRIAL_PATH) # Use the global variable we defined earlier
+        database_path: str,
+        seed: int,
+        config: dict) -> List[torch.utils.data.DataLoader]:
+    """Make PyTorch DataLoaders for train / developement / evaluation"""
+    track = config["track"]
+    prefix_2019 = "ASVspoof2019.{}".format(track)
 
-    print(f"Loading 2021 List from: {eval_2021_list_path}")
+    trn_database_path = database_path / "ASVspoof2019_{}_train/".format(track)
+    dev_database_path = database_path / "ASVspoof2019_{}_dev/".format(track)
+    eval_database_path = database_path / "ASVspoof2019_{}_eval/".format(track)
+
+    trn_list_path = (database_path /
+                     "ASVspoof2019_{}_cm_protocols/{}.cm.train.trn.txt".format(
+                         track, prefix_2019))
+    dev_trial_path = (database_path /
+                      "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
+                          track, prefix_2019))
+    eval_trial_path = (
+        database_path /
+        "ASVspoof2019_{}_cm_protocols/{}.cm.eval.trl.txt".format(
+            track, prefix_2019))
+
+    d_label_trn, file_train = genSpoof_list(dir_meta=trn_list_path,
+                                            is_train=True,
+                                            is_eval=False)
+    print("no. training files:", len(file_train))
+
+    train_set = Dataset_ASVspoof2019_train(list_IDs=file_train,
+                                           labels=d_label_trn,
+                                           base_dir=trn_database_path)
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+    trn_loader = DataLoader(train_set,
+                            batch_size=config["batch_size"],
+                            shuffle=True,
+                            drop_last=True,
+                            pin_memory=True,
+                            worker_init_fn=seed_worker,
+                            generator=gen)
+
+    # --- KAGGLE 2021 VALIDATION LOADER ---
+    print(f"Loading 2021 Validation Data from: {KAGGLE_2021_TRIAL_PATH}")
     
-    # Load the full list of 2021 files
-    d_label_2021, file_2021 = genSpoof_list(dir_meta=eval_2021_list_path,
+    # We use is_eval=False to force reading labels for validation
+    d_label_2021, file_2021 = genSpoof_list(dir_meta=KAGGLE_2021_TRIAL_PATH,
                                 is_train=False,
                                 is_eval=False) 
     
-    print("Total 2021 files:", len(file_2021))
+    print("no. validation/eval files (2021):", len(file_2021))
 
-    # --- OPTIMIZATION: Subset for Validation ---
-    # Only use the first 6,000 files for quick validation during training
-    # This speeds up the process by ~30x
-    dev_subset_files = file_2021[:6000] 
-    
-    # Use ALL files for the final evaluation
-    eval_all_files = file_2021
-
-    print(f"Subset for Dev (Epoch-check): {len(dev_subset_files)}")
-    print(f"Full set for Final Eval: {len(eval_all_files)}")
-
-    # Create two separate datasets
-    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=dev_subset_files,
+    # Pointing to the 2021 Audio Directory
+    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_2021,
                                             base_dir=Path(KAGGLE_2021_AUDIO_PATH))
     
-    eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=eval_all_files,
-                                            base_dir=Path(KAGGLE_2021_AUDIO_PATH))
-    
-    # Loader for Training Loop (Fast)
-    # INCREASE NUM_WORKERS to 4 for Kaggle
     dev_loader = DataLoader(dev_set,
                             batch_size=config["batch_size"],
                             shuffle=False,
                             drop_last=False,
-                            pin_memory=True,
-                            num_workers=4) 
+                            pin_memory=True)
 
-    # Loader for Final Step (Thorough)
-    eval_loader = DataLoader(eval_set,
+    # Use the same loader for final evaluation
+    eval_loader = DataLoader(dev_set,
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
-                             pin_memory=True,
-                             num_workers=4)
+                             pin_memory=True)
 
     return trn_loader, dev_loader, eval_loader
 
@@ -330,7 +348,7 @@ def train_epoch(
     num_total = 0.0
     ii = 0
     model.train()
-    
+
     # set objective (Loss) functions
     weight = torch.FloatTensor([0.1, 0.9]).to(device)
     criterion = nn.CrossEntropyLoss(weight=weight)
