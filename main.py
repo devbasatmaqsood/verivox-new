@@ -322,28 +322,45 @@ def produce_evaluation_file(
     trial_path: str) -> None:
     """Perform evaluation and save the score to a file"""
     model.eval()
+    
+    # 1. Read all trial lines into a dictionary for quick lookup
+    # This allows us to handle subsets (e.g. 6k val files vs 180k total files)
+    trial_map = {}
     with open(trial_path, "r") as f_trl:
-        trial_lines = f_trl.readlines()
+        for line in f_trl:
+            parts = line.strip().split(' ')
+            # Kaggle/ASVspoof format: 2nd column is usually the Key/filename
+            if len(parts) > 1:
+                utt_id = parts[1]
+                trial_map[utt_id] = parts
+    
     fname_list = []
     score_list = []
+    
+    # 2. Run Inference
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
             _, batch_out = model(batch_x)
             batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
-        # add outputs
+        
         fname_list.extend(utt_id)
         score_list.extend(batch_score.tolist())
 
-    assert len(trial_lines) == len(fname_list) == len(score_list)
+    # 3. Write results matching the files we actually processed
     with open(save_path, "w") as fh:
-        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
-            parts = trl.strip().split(' ')
+        for fn, sco in zip(fname_list, score_list):
+            if fn not in trial_map:
+                print(f"Warning: File {fn} not found in trial metadata. Skipping.")
+                continue
+                
+            parts = trial_map[fn]
             utt_id = parts[1]
-            key = parts[-1] # Robust fetch for Label
-            src = "unknown" # Placeholder as 2021 src format differs
-            assert fn == utt_id
+            key = parts[-1] # Robust fetch for Label (last column)
+            src = "unknown" # Placeholder
+            
             fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
+            
     print("Scores saved to {}".format(save_path))
 
 
