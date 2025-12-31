@@ -282,7 +282,7 @@ def get_loader(
     # OPTIMIZATION 2: Create a small subset for quick validation
     # We use the first 6000 files for the epoch-by-epoch check.
     # This makes the "Dev" step ~30x faster.
-    dev_subset_files = file_2021[:6000] 
+    dev_subset_files = file_2021[:10000] 
     eval_all_files = file_2021 # Keep all files for the final check
 
     print(f"Subset for Dev (Epoch-check): {len(dev_subset_files)}")
@@ -404,21 +404,37 @@ def train_epoch(
     return running_loss
 
 
-def calculate_EER_only(cm_scores_file, trial_file):
+def calculate_EER_only(cm_scores_file, trial_file=None):
     """
-    Custom function to calculate only EER using the 2021 protocol.
+    Custom function to calculate only EER.
+    It reads both scores and labels from the cm_scores_file output,
+    ensuring they always have the same length (e.g., 6000 vs 6000).
     """
-    # Load CM scores (Index 3 is the score in our output format)
+    # Load data from the generated score file
+    # Format written by produce_evaluation_file: utt_id src key score
     cm_data = np.genfromtxt(cm_scores_file, dtype=str)
+    
+    # Safety check: if the file is empty or has only 1 line
+    if cm_data.size == 0:
+        return 50.0 # Return default high EER if empty
+    if cm_data.ndim == 1:
+        cm_data = cm_data.reshape(1, -1)
+
+    # Column 2 is the Label ('bonafide' or 'spoof')
+    labels = cm_data[:, 2]
+    
+    # Column 3 is the Score
     cm_scores = cm_data[:, 3].astype(np.float64)
     
-    # Load Labels from trial file (Last column is label)
-    trial_data = np.genfromtxt(trial_file, dtype=str)
-    labels = trial_data[:, -1] 
-    
+    # Calculate EER
     target_scores = cm_scores[labels == 'bonafide']
     nontarget_scores = cm_scores[labels == 'spoof']
     
+    # Handle edge case where a mini-batch might miss one class
+    if len(target_scores) == 0 or len(nontarget_scores) == 0:
+        print("WARNING: Validation subset missing either bonafide or spoof samples.")
+        return 50.0
+
     eer, _ = compute_eer(target_scores, nontarget_scores)
     return eer * 100
 
