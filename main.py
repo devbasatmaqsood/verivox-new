@@ -197,28 +197,25 @@ def main(args: argparse.Namespace) -> None:
     if n_swa_update > 0:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
+    
+    # FIX 1: Point to the 2021 Trial Path, not the old 2019 one
     produce_evaluation_file(eval_loader, model, device, eval_score_path,
-                            eval_trial_path)
-    eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
-                                             asv_score_file=database_path /
-                                             config["asv_score_path"],
-                                             output_file=model_tag / "t-DCF_EER.txt")
+                            KAGGLE_2021_TRIAL_PATH)
+    
+    # FIX 2: Calculate EER only (Avoid t-DCF which requires ASV scores)
+    eval_eer = calculate_EER_only(
+        cm_scores_file=eval_score_path,
+        trial_file=KAGGLE_2021_TRIAL_PATH
+    )
+    
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
-    f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
+    f_log.write("Final EER: {:.3f}%".format(eval_eer))
     f_log.close()
 
-    torch.save(model.state_dict(),
-               model_save_path / "swa.pth")
-
-    if eval_eer <= best_eval_eer:
-        best_eval_eer = eval_eer
-    if eval_tdcf <= best_eval_tdcf:
-        best_eval_tdcf = eval_tdcf
-        torch.save(model.state_dict(),
-                   model_save_path / "best.pth")
-    print("Exp FIN. EER: {:.3f}, min t-DCF: {:.5f}".format(
-        best_eval_eer, best_eval_tdcf))
+    torch.save(model.state_dict(), model_save_path / "swa.pth")
+    
+    print("Exp FIN. Final EER: {:.3f}%".format(eval_eer))
 
 
 def get_model(model_config: Dict, device: torch.device):
