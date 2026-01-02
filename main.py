@@ -279,7 +279,7 @@ def get_loader(
     # OPTIMIZATION 2: Create a small subset for quick validation
     # We use the first 6000 files for the epoch-by-epoch check.
     # This makes the "Dev" step ~30x faster.
-    dev_subset_files = file_2021[:10000] 
+    dev_subset_files = file_2021[:25380]  # Use first 25,380 files for quick dev eval
     eval_all_files = file_2021 # Keep all files for the final check
 
     print(f"Subset for Dev (Epoch-check): {len(dev_subset_files)}")
