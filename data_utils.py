@@ -4,6 +4,7 @@ import soundfile as sf
 import torch
 import torchaudio 
 from torch import Tensor
+from pathlib import Path
 from torch.utils.data import Dataset
 
 ___author__ = "Hemlata Tak, Jee-weon Jung"
@@ -71,7 +72,7 @@ class Dataset_ASVspoof2019_train(Dataset):
            self.labels      : dictionary (key: utt key, value: label integer)"""
         self.list_IDs = list_IDs
         self.labels = labels
-        self.base_dir = base_dir
+        self.base_dir = path(base_dir)
         self.cut = 64600  # take ~4 sec audio (64600 samples)
 
     def __len__(self):
