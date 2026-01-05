@@ -5,7 +5,7 @@ import torch
 import torchaudio
 from torch import Tensor
 from torch.utils.data import Dataset
-from pathlib import Path  # <--- Fixes the 'NameError: name path is not defined'
+from pathlib import Path
 
 ___author__ = "Hemlata Tak, Jee-weon Jung"
 __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
@@ -71,9 +71,7 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        # Robust path construction
         filepath = self.base_dir / "flac" / f"{key}.flac"
-        
         try:
             X, _ = sf.read(str(filepath))
             X_pad = pad_random(X, self.cut)
@@ -81,15 +79,17 @@ class Dataset_ASVspoof2019_train(Dataset):
             y = self.labels[key]
             return x_inp, y
         except Exception as e:
-            # Fallback if file is missing/corrupt
-            # print(f"Error loading train file {filepath}: {e}") 
             return Tensor(np.zeros(self.cut)), self.labels[key]
 
-# --- EVAL/DEV DATASET CLASS ---
+# --- ROBUST EVAL/DEV DATASET CLASS (Fixes Split Dataset Issue) ---
 class Dataset_ASVspoof2019_devNeval(Dataset):
     def __init__(self, list_IDs, base_dir):
         self.list_IDs = list_IDs
         self.base_dir = Path(base_dir)
+        # We try to deduce the dataset root to find other parts
+        # If base_dir is ".../ASVspoof2021_DF_eval_part01/ASVspoof2021_DF_eval"
+        # Then .parent.parent is ".../avsspoof-2021" (the root)
+        self.dataset_root = self.base_dir.parent.parent 
         self.cut = 64600 
         self.missed_counts = 0 
 
@@ -99,15 +99,27 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
     def __getitem__(self, index):
         key = self.list_IDs[index]
         
-        # SEARCH LOGIC: Checks both LA and DF locations
+        # SEARCH STRATEGY: Look in current dir, then iterate all known parts
         paths_to_check = [
             self.base_dir / "flac" / f"{key}.flac",
             self.base_dir / f"{key}.flac",
-            self.base_dir / "ASVspoof2021_DF_eval" / "flac" / f"{key}.flac",
-            self.base_dir / "ASVspoof2021_DF_eval" / f"{key}.flac",
-            self.base_dir / "ASVspoof2021_DF_eval" / "ASVspoof2021_DF_eval" / "flac" / f"{key}.flac"
         ]
+
+        # Add all possible parts (part00 to part03 are standard for this dataset)
+        # We assume the standard structure: .../partXX/ASVspoof2021_DF_eval/flac/
+        parts = ["part00", "part01", "part02", "part03", "part04"] 
         
+        for part in parts:
+            # Construct path: root / part_folder / inner_folder / flac / file
+            # Note: folder names might vary slightly, so we try a couple variants
+            p1 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "ASVspoof2021_DF_eval" / "flac" / f"{key}.flac"
+            p2 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "flac" / f"{key}.flac"
+            paths_to_check.append(p1)
+            paths_to_check.append(p2)
+            
+        # Fallback for Logical Access (LA) just in case
+        paths_to_check.append(self.dataset_root / "ASVspoof2021_LA_eval" / "flac" / f"{key}.flac")
+
         filepath = None
         for p in paths_to_check:
             if os.path.exists(p): 
@@ -115,8 +127,8 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
                 break
         
         if filepath is None:
-            if self.missed_counts < 3: # Limit error prints
-                print(f"[ERROR] File missing: {key}.flac in {self.base_dir}")
+            if self.missed_counts < 3: 
+                print(f"[ERROR] File missing: {key}.flac. Checked {len(paths_to_check)} locations.")
             self.missed_counts += 1
             return Tensor(np.zeros(self.cut)), key
 
