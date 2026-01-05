@@ -88,46 +88,37 @@ class Dataset_ASVspoof2019_train(Dataset):
 
 
 # OVERRIDE Dataset Class to fix path issues
-class Dataset_ASVspoof2019_devNeval(Dataset):
-    def __init__(self, list_IDs, base_dir):
+class Dataset_ASVspoof2019_train(Dataset):
+    def __init__(self, list_IDs, labels, base_dir):
         self.list_IDs = list_IDs
-        self.base_dir = Path(base_dir)
-        self.cut = 64600 
+        self.labels = labels
+        self.base_dir = Path(base_dir) # <--- USE 'Path' (Capital P)
+        self.cut = 64600
+
+    def pad_random(self, x, max_len=64600):
+        x_len = x.shape[0]
+        if x_len >= max_len:
+            stt = np.random.randint(x_len - max_len)
+            return x[stt:stt + max_len]
+        num_repeats = int(max_len / x_len) + 1
+        padded_x = np.tile(x, (num_repeats))[:max_len]
+        return padded_x
 
     def __len__(self):
         return len(self.list_IDs)
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
+        # Use str(self.base_dir) to ensure it works with os.path or libraries expecting strings
+        filepath = self.base_dir / "flac" / f"{key}.flac"
         
-        # EXTENDED PATH SEARCH (Checks DF locations)
-        paths_to_check = [
-            self.base_dir / f"flac/{key}.flac",
-            self.base_dir / f"{key}.flac",
-            self.base_dir / "ASVspoof2021_DF_eval/flac" / f"{key}.flac",
-            # Handle Kaggle double-nesting (common issue)
-            self.base_dir / "ASVspoof2021_DF_eval/ASVspoof2021_DF_eval/flac" / f"{key}.flac" 
-        ]
-        
-        filepath = None
-        for p in paths_to_check:
-            if os.path.exists(p): 
-                filepath = p
-                break
-        
-        if filepath is None:
-            # Return silence if missing (prevents crash, but check your paths if this happens often!)
-            return Tensor(np.zeros(self.cut)), key
-
         try:
-            waveform, sample_rate = torchaudio.load(str(filepath))
-            X = waveform.squeeze(0).numpy()
-            # Basic padding logic
-            if X.shape[0] < self.cut:
-                num_repeats = int(self.cut / X.shape[0]) + 1
-                X = np.tile(X, (1, num_repeats))[:, :self.cut][0]
-            else:
-                X = X[:self.cut]
-            return Tensor(X), key
-        except:
-            return Tensor(np.zeros(self.cut)), key
+            X, _ = sf.read(str(filepath))
+            X_pad = self.pad_random(X, self.cut)
+            x_inp = Tensor(X_pad)
+            y = self.labels[key]
+            return x_inp, y
+        except Exception as e:
+            # Fallback if training file is missing/corrupt
+            print(f"Error loading train file {filepath}: {e}")
+            return Tensor(np.zeros(self.cut)), self.labels[key]
