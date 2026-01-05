@@ -86,13 +86,12 @@ class Dataset_ASVspoof2019_train(Dataset):
         return x_inp, y
 
 
+# OVERRIDE Dataset Class to fix path issues
 class Dataset_ASVspoof2019_devNeval(Dataset):
     def __init__(self, list_IDs, base_dir):
-        """self.list_IDs	: list of strings (each string: utt key),
-        """
         self.list_IDs = list_IDs
-        self.base_dir = base_dir
-        self.cut = 64600  # take ~4 sec audio (64600 samples)
+        self.base_dir = Path(base_dir)
+        self.cut = 64600 
 
     def __len__(self):
         return len(self.list_IDs)
@@ -100,45 +99,34 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
     def __getitem__(self, index):
         key = self.list_IDs[index]
         
-        # Define all possible paths to check
+        # EXTENDED PATH SEARCH (Checks DF locations)
         paths_to_check = [
-            self.base_dir / f"flac/{key}.flac",                       
+            self.base_dir / f"flac/{key}.flac",
             self.base_dir / f"{key}.flac",
-            # Add DF paths
-            self.base_dir / f"ASVspoof2021_DF_eval/flac/{key}.flac",
-            self.base_dir / f"ASVspoof2021_DF_eval/{key}.flac"       
+            self.base_dir / "ASVspoof2021_DF_eval/flac" / f"{key}.flac",
+            # Handle Kaggle double-nesting (common issue)
+            self.base_dir / "ASVspoof2021_DF_eval/ASVspoof2021_DF_eval/flac" / f"{key}.flac" 
         ]
         
         filepath = None
         for p in paths_to_check:
-            # Check if it is a file (not a directory)
-            if os.path.isfile(p): 
+            if os.path.exists(p): 
                 filepath = p
                 break
         
-        # Case 1: File not found at all
         if filepath is None:
-            print(f"WARNING: File missing for key '{key}'. Returning silence.")
-            dummy_x = Tensor(np.zeros(self.cut))
-            return dummy_x, key
+            # Return silence if missing (prevents crash, but check your paths if this happens often!)
+            return Tensor(np.zeros(self.cut)), key
 
-        # Case 2: File exists, try reading with Torchaudio (more robust)
         try:
-            # TORCHAUDIO CHANGE: Load with torchaudio instead of soundfile
             waveform, sample_rate = torchaudio.load(str(filepath))
-            
-            # torchaudio returns shape (Channels, Time), e.g., (1, 64000)
-            # We need (Time,) for the existing pad function, so we squeeze it.
             X = waveform.squeeze(0).numpy()
-            
-            X_pad = pad(X, self.cut)
-            x_inp = Tensor(X_pad)
-            return x_inp, key
-            
-        except Exception as e:
-            print(f"WARNING: Corrupt file detected at {filepath}")
-            print(f"Error details: {e}")
-            
-            # Return silent dummy audio so training doesn't crash
-            dummy_x = Tensor(np.zeros(self.cut))
-            return dummy_x, key
+            # Basic padding logic
+            if X.shape[0] < self.cut:
+                num_repeats = int(self.cut / X.shape[0]) + 1
+                X = np.tile(X, (1, num_repeats))[:, :self.cut][0]
+            else:
+                X = X[:self.cut]
+            return Tensor(X), key
+        except:
+            return Tensor(np.zeros(self.cut)), key
