@@ -103,9 +103,10 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
         # Define all possible paths to check
         paths_to_check = [
             self.base_dir / f"flac/{key}.flac",                       
-            self.base_dir / f"{key}.flac",                            
-            self.base_dir / f"ASVspoof2021_LA_eval/flac/{key}.flac",  
-            self.base_dir / f"ASVspoof2021_LA_eval/{key}.flac"       
+            self.base_dir / f"{key}.flac",
+            # Add DF paths
+            self.base_dir / f"ASVspoof2021_DF_eval/flac/{key}.flac",
+            self.base_dir / f"ASVspoof2021_DF_eval/{key}.flac"       
         ]
         
         filepath = None
