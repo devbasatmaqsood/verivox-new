@@ -10,6 +10,10 @@ from pathlib import Path
 ___author__ = "Hemlata Tak, Jee-weon Jung"
 __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
 
+# --- GLOBAL CACHE TO SAVE DISCOVERED PATHS ---
+# This prevents scanning the disk over and over again.
+DISCOVERED_DIRS = set()
+
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
     d_meta = {}
     file_list = []
@@ -81,54 +85,62 @@ class Dataset_ASVspoof2019_train(Dataset):
         except Exception as e:
             return Tensor(np.zeros(self.cut)), self.labels[key]
 
-# --- ROBUST EVAL/DEV DATASET CLASS (Fixes Split Dataset Issue) ---
+# --- SMART EVAL/DEV DATASET CLASS ---
 class Dataset_ASVspoof2019_devNeval(Dataset):
     def __init__(self, list_IDs, base_dir):
         self.list_IDs = list_IDs
         self.base_dir = Path(base_dir)
-        # We try to deduce the dataset root to find other parts
-        # If base_dir is ".../ASVspoof2021_DF_eval_part01/ASVspoof2021_DF_eval"
-        # Then .parent.parent is ".../avsspoof-2021" (the root)
-        self.dataset_root = self.base_dir.parent.parent 
         self.cut = 64600 
         self.missed_counts = 0 
 
     def __len__(self):
         return len(self.list_IDs)
 
+    def find_file_dynamic(self, key):
+        """Searches for the file in discovered dirs first, then scans the whole input."""
+        filename = f"{key}.flac"
+        
+        # 1. Check cached directories first (Fast)
+        for d in DISCOVERED_DIRS:
+            test_path = d / filename
+            if test_path.exists():
+                return test_path
+        
+        # 2. If not found, run a deep search (Slow, but only runs once per new folder)
+        # print(f"Deep searching for {filename}...") # Uncomment to debug
+        for root, dirs, files in os.walk("/kaggle/input"):
+            if filename in files:
+                found_path = Path(root) / filename
+                found_dir = Path(root)
+                # Add to cache so next time it's fast
+                DISCOVERED_DIRS.add(found_dir)
+                return found_path
+                
+        return None
+
     def __getitem__(self, index):
         key = self.list_IDs[index]
         
-        # SEARCH STRATEGY: Look in current dir, then iterate all known parts
+        # 1. Try standard paths
         paths_to_check = [
             self.base_dir / "flac" / f"{key}.flac",
             self.base_dir / f"{key}.flac",
         ]
-
-        # Add all possible parts (part00 to part03 are standard for this dataset)
-        # We assume the standard structure: .../partXX/ASVspoof2021_DF_eval/flac/
-        parts = ["part00", "part01", "part02", "part03", "part04"] 
         
-        for part in parts:
-            # Construct path: root / part_folder / inner_folder / flac / file
-            # Note: folder names might vary slightly, so we try a couple variants
-            p1 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "ASVspoof2021_DF_eval" / "flac" / f"{key}.flac"
-            p2 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "flac" / f"{key}.flac"
-            paths_to_check.append(p1)
-            paths_to_check.append(p2)
-            
-        # Fallback for Logical Access (LA) just in case
-        paths_to_check.append(self.dataset_root / "ASVspoof2021_LA_eval" / "flac" / f"{key}.flac")
-
         filepath = None
         for p in paths_to_check:
-            if os.path.exists(p): 
+            if p.exists():
                 filepath = p
                 break
         
+        # 2. If standard paths fail, use the Smart Search
+        if filepath is None:
+            filepath = self.find_file_dynamic(key)
+
+        # 3. If STILL not found, error out
         if filepath is None:
             if self.missed_counts < 3: 
-                print(f"[ERROR] File missing: {key}.flac. Checked {len(paths_to_check)} locations.")
+                print(f"[ERROR] File missing: {key}.flac. Checked all input folders.")
             self.missed_counts += 1
             return Tensor(np.zeros(self.cut)), key
 
