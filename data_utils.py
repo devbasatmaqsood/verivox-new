@@ -10,8 +10,7 @@ from pathlib import Path
 ___author__ = "Hemlata Tak, Jee-weon Jung"
 __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
 
-# --- GLOBAL CACHE TO SAVE DISCOVERED PATHS ---
-# This prevents scanning the disk over and over again.
+# --- GLOBAL CACHE ---
 DISCOVERED_DIRS = set()
 
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
@@ -62,7 +61,7 @@ def pad_random(x: np.ndarray, max_len: int = 64600):
     padded_x = np.tile(x, (num_repeats))[:max_len]
     return padded_x
 
-# --- TRAIN DATASET CLASS ---
+# --- TRAIN DATASET CLASS (2019 LA) ---
 class Dataset_ASVspoof2019_train(Dataset):
     def __init__(self, list_IDs, labels, base_dir):
         self.list_IDs = list_IDs
@@ -75,6 +74,7 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
+        # Training typically expects "flac" folder structure
         filepath = self.base_dir / "flac" / f"{key}.flac"
         try:
             X, _ = sf.read(str(filepath))
@@ -83,13 +83,16 @@ class Dataset_ASVspoof2019_train(Dataset):
             y = self.labels[key]
             return x_inp, y
         except Exception as e:
+            # Fallback for training safety
             return Tensor(np.zeros(self.cut)), self.labels[key]
 
-# --- SMART EVAL/DEV DATASET CLASS ---
+# --- EVAL DATASET CLASS (Strictly 2021 DF) ---
 class Dataset_ASVspoof2019_devNeval(Dataset):
     def __init__(self, list_IDs, base_dir):
         self.list_IDs = list_IDs
         self.base_dir = Path(base_dir)
+        # Identify root to find other DF parts
+        self.dataset_root = self.base_dir.parent.parent 
         self.cut = 64600 
         self.missed_counts = 0 
 
@@ -97,22 +100,22 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
         return len(self.list_IDs)
 
     def find_file_dynamic(self, key):
-        """Searches for the file in discovered dirs first, then scans the whole input."""
+        """Searches for the file ONLY in DF folders."""
         filename = f"{key}.flac"
         
-        # 1. Check cached directories first (Fast)
+        # 1. Check cached DF directories
         for d in DISCOVERED_DIRS:
             test_path = d / filename
             if test_path.exists():
                 return test_path
         
-        # 2. If not found, run a deep search (Slow, but only runs once per new folder)
-        # print(f"Deep searching for {filename}...") # Uncomment to debug
+        # 2. Deep search ONLY for DF keys
+        # We only search folders that look like they belong to DF to be strict
         for root, dirs, files in os.walk("/kaggle/input"):
-            if filename in files:
+            # STRICT CHECK: Ensure we are only looking in DF folders
+            if "DF_eval" in root and filename in files:
                 found_path = Path(root) / filename
                 found_dir = Path(root)
-                # Add to cache so next time it's fast
                 DISCOVERED_DIRS.add(found_dir)
                 return found_path
                 
@@ -121,26 +124,33 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
     def __getitem__(self, index):
         key = self.list_IDs[index]
         
-        # 1. Try standard paths
+        # 1. Try provided path (DF)
         paths_to_check = [
             self.base_dir / "flac" / f"{key}.flac",
             self.base_dir / f"{key}.flac",
         ]
-        
+
+        # 2. Try known DF parts (Explicitly DF only)
+        parts = ["part00", "part01", "part02", "part03", "part04", "part05"] 
+        for part in parts:
+            p1 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "ASVspoof2021_DF_eval" / "flac" / f"{key}.flac"
+            p2 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "flac" / f"{key}.flac"
+            paths_to_check.append(p1)
+            paths_to_check.append(p2)
+
         filepath = None
         for p in paths_to_check:
             if p.exists():
                 filepath = p
                 break
         
-        # 2. If standard paths fail, use the Smart Search
+        # 3. Dynamic Search (DF Only)
         if filepath is None:
             filepath = self.find_file_dynamic(key)
 
-        # 3. If STILL not found, error out
         if filepath is None:
             if self.missed_counts < 3: 
-                print(f"[ERROR] File missing: {key}.flac. Checked all input folders.")
+                print(f"[ERROR] DF File missing: {key}.flac")
             self.missed_counts += 1
             return Tensor(np.zeros(self.cut)), key
 
