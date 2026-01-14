@@ -10,8 +10,9 @@ from pathlib import Path
 ___author__ = "Hemlata Tak, Jee-weon Jung"
 __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
 
-# --- GLOBAL CACHE ---
-DISCOVERED_DIRS = set()
+# --- GLOBAL CACHE (Optimized) ---
+# We store the exact folder where we found files to speed up subsequent lookups
+FOUND_DIRS = set()
 
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
     d_meta = {}
@@ -83,77 +84,60 @@ class Dataset_ASVspoof2019_train(Dataset):
             y = self.labels[key]
             return x_inp, y
         except Exception as e:
-            # Fallback for training safety
             return Tensor(np.zeros(self.cut)), self.labels[key]
 
-# --- EVAL DATASET CLASS (Strictly 2021 DF) ---
+# --- TURBO EVAL DATASET CLASS (Instant Lookup) ---
 class Dataset_ASVspoof2019_devNeval(Dataset):
     def __init__(self, list_IDs, base_dir):
         self.list_IDs = list_IDs
         self.base_dir = Path(base_dir)
-        # Identify root to find other DF parts
-        self.dataset_root = self.base_dir.parent.parent 
+        # Root is typically /kaggle/input/avsspoof-2021/
+        self.dataset_root = Path("/kaggle/input/avsspoof-2021/") 
         self.cut = 64600 
         self.missed_counts = 0 
 
     def __len__(self):
         return len(self.list_IDs)
 
-    def find_file_dynamic(self, key):
-        """Searches for the file ONLY in DF folders."""
-        filename = f"{key}.flac"
-        
-        # 1. Check cached DF directories
-        for d in DISCOVERED_DIRS:
-            test_path = d / filename
-            if test_path.exists():
-                return test_path
-        
-        # 2. Deep search ONLY for DF keys
-        # We only search folders that look like they belong to DF to be strict
-        for root, dirs, files in os.walk("/kaggle/input"):
-            # STRICT CHECK: Ensure we are only looking in DF folders
-            if "DF_eval" in root and filename in files:
-                found_path = Path(root) / filename
-                found_dir = Path(root)
-                DISCOVERED_DIRS.add(found_dir)
-                return found_path
-                
-        return None
-
     def __getitem__(self, index):
         key = self.list_IDs[index]
         
-        # 1. Try provided path (DF)
+        # 1. FAST CHECK: If we found files in a specific folder before, check there first!
+        for d in FOUND_DIRS:
+            p = d / f"{key}.flac"
+            if p.exists():
+                return self.load_audio(p, key)
+
+        # 2. DEFINED PATHS: Check all known Kaggle Dataset Partitions
+        # This prevents the slow "os.walk" search.
         paths_to_check = [
             self.base_dir / "flac" / f"{key}.flac",
             self.base_dir / f"{key}.flac",
         ]
-
-        # 2. Try known DF parts (Explicitly DF only)
-        parts = ["part00", "part01", "part02", "part03", "part04", "part05"] 
+        
+        # Explicitly add parts 00 through 07 (covering the full dataset)
+        parts = ["part00", "part01", "part02", "part03", "part04", "part05", "part06", "part07"]
+        
         for part in parts:
+            # Common Kaggle path structures
             p1 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "ASVspoof2021_DF_eval" / "flac" / f"{key}.flac"
             p2 = self.dataset_root / f"ASVspoof2021_DF_eval_{part}" / "flac" / f"{key}.flac"
             paths_to_check.append(p1)
             paths_to_check.append(p2)
 
-        filepath = None
         for p in paths_to_check:
             if p.exists():
-                filepath = p
-                break
-        
-        # 3. Dynamic Search (DF Only)
-        if filepath is None:
-            filepath = self.find_file_dynamic(key)
+                # Success! Save this directory to cache so next time it is instant
+                FOUND_DIRS.add(p.parent)
+                return self.load_audio(p, key)
 
-        if filepath is None:
-            if self.missed_counts < 3: 
-                print(f"[ERROR] DF File missing: {key}.flac")
-            self.missed_counts += 1
-            return Tensor(np.zeros(self.cut)), key
+        # 3. IF STILL MISSING
+        if self.missed_counts < 10: 
+            print(f"[ERROR] DF File missing: {key}.flac")
+        self.missed_counts += 1
+        return Tensor(np.zeros(self.cut)), key
 
+    def load_audio(self, filepath, key):
         try:
             waveform, sample_rate = torchaudio.load(str(filepath))
             X = waveform.squeeze(0).numpy()
