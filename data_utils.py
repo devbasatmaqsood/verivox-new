@@ -73,19 +73,38 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     # In data_utils.py
 
+class Dataset_ASVspoof2019_train(Dataset):
+    def __init__(self, list_IDs, labels, base_dir):
+        # ... (keep init same as before) ...
+        self.list_IDs = list_IDs
+        self.labels = labels
+        self.base_dir = base_dir
+        self.cut = 64600
+
+    def __len__(self):
+        return len(self.list_IDs)
+
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        flac_path = str(self.base_dir / f"flac/{key}.flac")  # Define path first
+        
+        # Construct path
+        flac_path = str(self.base_dir / f"flac/{key}.flac")
         
         try:
+            # Try to read the file
             X, _ = sf.read(flac_path)
+            
         except Exception as e:
-            print(f"\n[CRITICAL ERROR] Failed to read file: {flac_path}")
-            print(f"Error details: {e}")
-            # Optional: Return a dummy zero tensor to keep training alive (dangerous for performance but good for debugging)
-            # return torch.zeros(64600), 0 
-            raise e # Re-raise to stop and see the error
+            # If ANY error occurs (Corrupt file, not found, etc.)
+            print(f"\n[WARNING] Skipping bad file: {flac_path} | Error: {e}")
+            
+            # RECURSION TRICK:
+            # Automatically try to load the NEXT file in the list instead.
+            # The % operator ensures we loop back to the start if we are at the end.
+            new_index = (index + 1) % len(self.list_IDs)
+            return self.__getitem__(new_index)
 
+        # Proceed with normal processing if file loaded successfully
         X_pad = pad_random(X, self.cut)
         x_inp = Tensor(X_pad)
         y = self.labels[key]
