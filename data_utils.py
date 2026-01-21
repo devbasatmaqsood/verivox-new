@@ -71,9 +71,21 @@ class Dataset_ASVspoof2019_train(Dataset):
     def __len__(self):
         return len(self.list_IDs)
 
+    # In data_utils.py
+
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
+        flac_path = str(self.base_dir / f"flac/{key}.flac")  # Define path first
+        
+        try:
+            X, _ = sf.read(flac_path)
+        except Exception as e:
+            print(f"\n[CRITICAL ERROR] Failed to read file: {flac_path}")
+            print(f"Error details: {e}")
+            # Optional: Return a dummy zero tensor to keep training alive (dangerous for performance but good for debugging)
+            # return torch.zeros(64600), 0 
+            raise e # Re-raise to stop and see the error
+
         X_pad = pad_random(X, self.cut)
         x_inp = Tensor(X_pad)
         y = self.labels[key]
@@ -93,7 +105,7 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
+        X, _ = sf.read(str(self.base_dir / f"{key}.flac"))
         X_pad = pad(X, self.cut)
         x_inp = Tensor(X_pad)
         return x_inp, key
