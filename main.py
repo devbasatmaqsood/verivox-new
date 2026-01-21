@@ -24,15 +24,7 @@ from torchcontrib.optim import SWA
 
 from data_utils import (Dataset_ASVspoof2019_train,
                         Dataset_ASVspoof2019_devNeval, genSpoof_list)
-from evaluation import calculate_tDCF_EER, compute_eer
-import numpy as np
-
-# --- DEFINE KAGGLE PATHS HERE ---
-# Based on your input:
-KAGGLE_2021_TRIAL_PATH = "/kaggle/working/formatted_eval_protocol.txt"
-# IMPORTANT: Check this audio path. It usually ends in 'flac' or the parent folder containing 'flac'
-KAGGLE_2021_AUDIO_PATH = "/kaggle/input/avsspoof-2021/ASVspoof2021_DF_eval_part01/ASVspoof2021_DF_eval/"
-
+from evaluation import calculate_tDCF_EER
 from utils import create_optimizer, seed_worker, set_seed, str_to_bool
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -103,16 +95,18 @@ def main(args: argparse.Namespace) -> None:
         model.load_state_dict(
             torch.load(config["model_path"], map_location=device))
         print("Model loaded : {}".format(config["model_path"]))
-        print("Start evaluation on 2021 Kaggle Data...")
-        
+        print("Start evaluation...")
         produce_evaluation_file(eval_loader, model, device,
-                                eval_score_path, KAGGLE_2021_TRIAL_PATH)
-        
-        eval_eer = calculate_EER_only(
+                                eval_score_path, eval_trial_path)
+        calculate_tDCF_EER(cm_scores_file=eval_score_path,
+                           asv_score_file=database_path /
+                           config["asv_score_path"],
+                           output_file=model_tag / "t-DCF_EER.txt")
+        print("DONE.")
+        eval_eer, eval_tdcf = calculate_tDCF_EER(
             cm_scores_file=eval_score_path,
-            trial_file=KAGGLE_2021_TRIAL_PATH
-        )
-        print("DONE. EER: {:.4f}%".format(eval_eer))
+            asv_score_file=database_path / config["asv_score_path"],
+            output_file=model_tag/"loaded_model_t-DCF_EER.txt")
         sys.exit(0)
 
     # get optimizer and scheduler
@@ -137,21 +131,15 @@ def main(args: argparse.Namespace) -> None:
         print("Start training epoch{:03d}".format(epoch))
         running_loss = train_epoch(trn_loader, model, optimizer, device,
                                    scheduler, config)
-        # Define 2021 trial path for scoring
-        trial_2021_path = database_path / "ASVspoof2021_LA_eval/ASVspoof2021.LA.cm.eval.trl.txt"
-
         produce_evaluation_file(dev_loader, model, device,
-                                metric_path/"dev_score.txt", KAGGLE_2021_TRIAL_PATH)
-        
-        # Calculate EER only
-        dev_eer = calculate_EER_only(
+                                metric_path/"dev_score.txt", dev_trial_path)
+        dev_eer, dev_tdcf = calculate_tDCF_EER(
             cm_scores_file=metric_path/"dev_score.txt",
-            trial_file=KAGGLE_2021_TRIAL_PATH
-        )
-        dev_tdcf = 0.0 # Dummy value since we aren't calculating it
-        
-        print("DONE.\nLoss:{:.5f}, dev_eer: {:.3f}%".format(
-            running_loss, dev_eer))
+            asv_score_file=database_path/config["asv_score_path"],
+            output_file=metric_path/"dev_t-DCF_EER_{}epo.txt".format(epoch),
+            printout=False)
+        print("DONE.\nLoss:{:.5f}, dev_eer: {:.3f}, dev_tdcf:{:.5f}".format(
+            running_loss, dev_eer, dev_tdcf))
         writer.add_scalar("loss", running_loss, epoch)
         writer.add_scalar("dev_eer", dev_eer, epoch)
         writer.add_scalar("dev_tdcf", dev_tdcf, epoch)
@@ -197,25 +185,28 @@ def main(args: argparse.Namespace) -> None:
     if n_swa_update > 0:
         optimizer_swa.swap_swa_sgd()
         optimizer_swa.bn_update(trn_loader, model, device=device)
-    
-    # FIX 1: Point to the 2021 Trial Path, not the old 2019 one
     produce_evaluation_file(eval_loader, model, device, eval_score_path,
-                            KAGGLE_2021_TRIAL_PATH)
-    
-    # FIX 2: Calculate EER only (Avoid t-DCF which requires ASV scores)
-    eval_eer = calculate_EER_only(
-        cm_scores_file=eval_score_path,
-        trial_file=KAGGLE_2021_TRIAL_PATH
-    )
-    
+                            eval_trial_path)
+    eval_eer, eval_tdcf = calculate_tDCF_EER(cm_scores_file=eval_score_path,
+                                             asv_score_file=database_path /
+                                             config["asv_score_path"],
+                                             output_file=model_tag / "t-DCF_EER.txt")
     f_log = open(model_tag / "metric_log.txt", "a")
     f_log.write("=" * 5 + "\n")
-    f_log.write("Final EER: {:.3f}%".format(eval_eer))
+    f_log.write("EER: {:.3f}, min t-DCF: {:.5f}".format(eval_eer, eval_tdcf))
     f_log.close()
 
-    torch.save(model.state_dict(), model_save_path / "swa.pth")
-    
-    print("Exp FIN. Final EER: {:.3f}%".format(eval_eer))
+    torch.save(model.state_dict(),
+               model_save_path / "swa.pth")
+
+    if eval_eer <= best_eval_eer:
+        best_eval_eer = eval_eer
+    if eval_tdcf <= best_eval_tdcf:
+        best_eval_tdcf = eval_tdcf
+        torch.save(model.state_dict(),
+                   model_save_path / "best.pth")
+    print("Exp FIN. EER: {:.3f}, min t-DCF: {:.5f}".format(
+        best_eval_eer, best_eval_tdcf))
 
 
 def get_model(model_config: Dict, device: torch.device):
@@ -238,13 +229,20 @@ def get_loader(
     prefix_2019 = "ASVspoof2019.{}".format(track)
 
     trn_database_path = database_path / "ASVspoof2019_{}_train/".format(track)
-    
-    # 2019 Training Protocol
+    dev_database_path = database_path / "ASVspoof2019_{}_dev/".format(track)
+    eval_database_path = database_path / "ASVspoof2019_{}_eval/".format(track)
+
     trn_list_path = (database_path /
                      "ASVspoof2019_{}_cm_protocols/{}.cm.train.trn.txt".format(
                          track, prefix_2019))
-    
-    # --- TRAIN LOADER ---
+    dev_trial_path = (database_path /
+                      "ASVspoof2019_{}_cm_protocols/{}.cm.dev.trl.txt".format(
+                          track, prefix_2019))
+    eval_trial_path = (
+        database_path /
+        "ASVspoof2019_{}_cm_protocols/{}.cm.eval.trl.txt".format(
+            track, prefix_2019))
+
     d_label_trn, file_train = genSpoof_list(dir_meta=trn_list_path,
                                             is_train=True,
                                             is_eval=False)
@@ -255,58 +253,37 @@ def get_loader(
                                            base_dir=trn_database_path)
     gen = torch.Generator()
     gen.manual_seed(seed)
-    
-    # OPTIMIZATION 1: Added num_workers=4
     trn_loader = DataLoader(train_set,
                             batch_size=config["batch_size"],
                             shuffle=True,
                             drop_last=True,
                             pin_memory=True,
                             worker_init_fn=seed_worker,
-                            generator=gen,
-                            num_workers=4) 
+                            generator=gen)
 
-    # --- KAGGLE 2021 VALIDATION LOADER ---
-    print(f"Loading 2021 Validation Data from: {KAGGLE_2021_TRIAL_PATH}")
-    
-    # Load the FULL list of 2021 files
-    d_label_2021, file_2021 = genSpoof_list(dir_meta=KAGGLE_2021_TRIAL_PATH,
+    _, file_dev = genSpoof_list(dir_meta=dev_trial_path,
                                 is_train=False,
-                                is_eval=False) 
-    
-    print("Total 2021 files available:", len(file_2021))
+                                is_eval=False)
+    print("no. validation files:", len(file_dev))
 
-    # OPTIMIZATION 2: Create a small subset for quick validation
-    # We use the first 6000 files for the epoch-by-epoch check.
-    # This makes the "Dev" step ~30x faster.
-    dev_subset_files = file_2021[:25380]  # Use first 25,380 files for quick dev eval
-    eval_all_files = file_2021 # Keep all files for the final check
-
-    print(f"Subset for Dev (Epoch-check): {len(dev_subset_files)}")
-    print(f"Full set for Final Eval: {len(eval_all_files)}")
-
-    # Create two separate datasets
-    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=dev_subset_files,
-                                            base_dir=Path(KAGGLE_2021_AUDIO_PATH))
-    
-    eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=eval_all_files,
-                                            base_dir=Path(KAGGLE_2021_AUDIO_PATH))
-    
-    # Dev Loader (Fast - used inside the training loop)
+    dev_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_dev,
+                                            base_dir=dev_database_path)
     dev_loader = DataLoader(dev_set,
                             batch_size=config["batch_size"],
                             shuffle=False,
                             drop_last=False,
-                            pin_memory=True,
-                            num_workers=4)
+                            pin_memory=True)
 
-    # Eval Loader (Full - used at the very end)
+    file_eval = genSpoof_list(dir_meta=eval_trial_path,
+                              is_train=False,
+                              is_eval=True)
+    eval_set = Dataset_ASVspoof2019_devNeval(list_IDs=file_eval,
+                                             base_dir=eval_database_path)
     eval_loader = DataLoader(eval_set,
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
-                             pin_memory=True,
-                             num_workers=4)
+                             pin_memory=True)
 
     return trn_loader, dev_loader, eval_loader
 
@@ -319,45 +296,25 @@ def produce_evaluation_file(
     trial_path: str) -> None:
     """Perform evaluation and save the score to a file"""
     model.eval()
-    
-    # 1. Read all trial lines into a dictionary for quick lookup
-    # This allows us to handle subsets (e.g. 6k val files vs 180k total files)
-    trial_map = {}
     with open(trial_path, "r") as f_trl:
-        for line in f_trl:
-            parts = line.strip().split(' ')
-            # Kaggle/ASVspoof format: 2nd column is usually the Key/filename
-            if len(parts) > 1:
-                utt_id = parts[1]
-                trial_map[utt_id] = parts
-    
+        trial_lines = f_trl.readlines()
     fname_list = []
     score_list = []
-    
-    # 2. Run Inference
     for batch_x, utt_id in data_loader:
         batch_x = batch_x.to(device)
         with torch.no_grad():
             _, batch_out = model(batch_x)
             batch_score = (batch_out[:, 1]).data.cpu().numpy().ravel()
-        
+        # add outputs
         fname_list.extend(utt_id)
         score_list.extend(batch_score.tolist())
 
-    # 3. Write results matching the files we actually processed
+    assert len(trial_lines) == len(fname_list) == len(score_list)
     with open(save_path, "w") as fh:
-        for fn, sco in zip(fname_list, score_list):
-            if fn not in trial_map:
-                print(f"Warning: File {fn} not found in trial metadata. Skipping.")
-                continue
-                
-            parts = trial_map[fn]
-            utt_id = parts[1]
-            key = parts[-1] # Robust fetch for Label (last column)
-            src = "unknown" # Placeholder
-            
+        for fn, sco, trl in zip(fname_list, score_list, trial_lines):
+            _, utt_id, _, src, key = trl.strip().split(' ')
+            assert fn == utt_id
             fh.write("{} {} {} {}\n".format(utt_id, src, key, sco))
-            
     print("Scores saved to {}".format(save_path))
 
 
@@ -400,40 +357,6 @@ def train_epoch(
     running_loss /= num_total
     return running_loss
 
-
-def calculate_EER_only(cm_scores_file, trial_file=None):
-    """
-    Custom function to calculate only EER.
-    It reads both scores and labels from the cm_scores_file output,
-    ensuring they always have the same length (e.g., 6000 vs 6000).
-    """
-    # Load data from the generated score file
-    # Format written by produce_evaluation_file: utt_id src key score
-    cm_data = np.genfromtxt(cm_scores_file, dtype=str)
-    
-    # Safety check: if the file is empty or has only 1 line
-    if cm_data.size == 0:
-        return 50.0 # Return default high EER if empty
-    if cm_data.ndim == 1:
-        cm_data = cm_data.reshape(1, -1)
-
-    # Column 2 is the Label ('bonafide' or 'spoof')
-    labels = cm_data[:, 2]
-    
-    # Column 3 is the Score
-    cm_scores = cm_data[:, 3].astype(np.float64)
-    
-    # Calculate EER
-    target_scores = cm_scores[labels == 'bonafide']
-    nontarget_scores = cm_scores[labels == 'spoof']
-    
-    # Handle edge case where a mini-batch might miss one class
-    if len(target_scores) == 0 or len(nontarget_scores) == 0:
-        print("WARNING: Validation subset missing either bonafide or spoof samples.")
-        return 50.0
-
-    eer, _ = compute_eer(target_scores, nontarget_scores)
-    return eer * 100
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ASVspoof detection system")
