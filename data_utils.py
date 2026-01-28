@@ -107,7 +107,7 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
+        X, _ = sf.read(str(self.base_dir / f"{key}.flac"))
         X_pad = pad(X, self.cut)
         x_inp = Tensor(X_pad)
         return x_inp, key
