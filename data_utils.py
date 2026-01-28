@@ -73,7 +73,21 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"flac/{key}.flac"))
+        # Construct the full path explicitly for debugging
+        flac_path = self.base_dir / f"flac/{key}.flac"
+        
+        try:
+            X, _ = sf.read(str(flac_path))
+        except Exception as e:
+            print(f"\n[CRITICAL ERROR] Could not read file: {flac_path}")
+            # Check if file exists and print size
+            import os
+            if os.path.exists(flac_path):
+                print(f"File exists. Size: {os.path.getsize(flac_path)} bytes")
+            else:
+                print("File does NOT exist at this path.")
+            raise e
+
         X_pad = pad_random(X, self.cut)
         x_inp = Tensor(X_pad)
         y = self.labels[key]
