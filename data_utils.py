@@ -1,15 +1,14 @@
 import numpy as np
-import soundfile as sf
 import torch
+import torchaudio # <--- Switched to torchaudio
 from torch import Tensor
 from torch.utils.data import Dataset
+import os
 
 ___author__ = "Hemlata Tak, Jee-weon Jung"
 __email__ = "tak@eurecom.fr, jeeweon.jung@navercorp.com"
 
-
 def genSpoof_list(dir_meta, is_train=False, is_eval=False):
-
     d_meta = {}
     file_list = []
     with open(dir_meta, "r") as f:
@@ -25,7 +24,6 @@ def genSpoof_list(dir_meta, is_train=False, is_eval=False):
     elif is_eval:
         for line in l_meta:
             _, key, _, _, _ = line.strip().split(" ")
-            #key = line.strip()
             file_list.append(key)
         return file_list
     else:
@@ -61,8 +59,6 @@ def pad_random(x: np.ndarray, max_len: int = 64600):
 
 class Dataset_ASVspoof2019_train(Dataset):
     def __init__(self, list_IDs, labels, base_dir):
-        """self.list_IDs	: list of strings (each string: utt key),
-           self.labels      : dictionary (key: utt key, value: label integer)"""
         self.list_IDs = list_IDs
         self.labels = labels
         self.base_dir = base_dir
@@ -73,19 +69,19 @@ class Dataset_ASVspoof2019_train(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        # Construct the full path explicitly for debugging
+        
+        # Point to the FLAC file
+        # Note: We keep 'flac/' here because your error log confirmed the file exists inside a 'flac' folder.
         flac_path = self.base_dir / f"flac/{key}.flac"
         
         try:
-            X, _ = sf.read(str(flac_path))
+            # Use torchaudio instead of soundfile
+            waveform, sample_rate = torchaudio.load(str(flac_path))
+            # Convert (Channels, Time) -> (Time,) numpy array for compatibility
+            X = waveform.squeeze(0).numpy() 
         except Exception as e:
-            print(f"\n[CRITICAL ERROR] Could not read file: {flac_path}")
-            # Check if file exists and print size
-            import os
-            if os.path.exists(flac_path):
-                print(f"File exists. Size: {os.path.getsize(flac_path)} bytes")
-            else:
-                print("File does NOT exist at this path.")
+            print(f"[ERROR] Failed to load file: {flac_path}")
+            # Fallback: create silent audio to prevent crash, or raise error
             raise e
 
         X_pad = pad_random(X, self.cut)
@@ -96,8 +92,6 @@ class Dataset_ASVspoof2019_train(Dataset):
 
 class Dataset_ASVspoof2019_devNeval(Dataset):
     def __init__(self, list_IDs, base_dir):
-        """self.list_IDs	: list of strings (each string: utt key),
-        """
         self.list_IDs = list_IDs
         self.base_dir = base_dir
         self.cut = 64600  # take ~4 sec audio (64600 samples)
@@ -107,7 +101,15 @@ class Dataset_ASVspoof2019_devNeval(Dataset):
 
     def __getitem__(self, index):
         key = self.list_IDs[index]
-        X, _ = sf.read(str(self.base_dir / f"{key}.flac"))
+        flac_path = self.base_dir / f"flac/{key}.flac"
+        
+        try:
+            waveform, sample_rate = torchaudio.load(str(flac_path))
+            X = waveform.squeeze(0).numpy()
+        except Exception as e:
+            print(f"[ERROR] Failed to load file: {flac_path}")
+            raise e
+            
         X_pad = pad(X, self.cut)
         x_inp = Tensor(X_pad)
         return x_inp, key
