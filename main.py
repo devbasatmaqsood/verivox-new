@@ -259,8 +259,7 @@ def get_loader(
                             drop_last=True,
                             pin_memory=True,
                             worker_init_fn=seed_worker,
-                            generator=gen,
-                            num_workers=4)
+                            generator=gen)
 
     _, file_dev = genSpoof_list(dir_meta=dev_trial_path,
                                 is_train=False,
@@ -273,8 +272,7 @@ def get_loader(
                             batch_size=config["batch_size"],
                             shuffle=False,
                             drop_last=False,
-                            pin_memory=True,
-                            num_workers=4)
+                            pin_memory=True)
 
     file_eval = genSpoof_list(dir_meta=eval_trial_path,
                               is_train=False,
@@ -285,8 +283,7 @@ def get_loader(
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
-                             pin_memory=True,
-                             num_workers=4)
+                             pin_memory=True)
 
     return trn_loader, dev_loader, eval_loader
 
