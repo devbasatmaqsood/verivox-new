@@ -11,6 +11,13 @@ import json
 import os
 import sys
 import warnings
+
+# Paste the fix here:
+warnings.filterwarnings("ignore", message=".*torchaudio.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*StreamingMediaDecoder.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*In 2.9, this function.*", category=UserWarning)
+
+
 from importlib import import_module
 from pathlib import Path
 from shutil import copy
