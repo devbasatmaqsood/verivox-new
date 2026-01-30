@@ -114,6 +114,9 @@ def main(args: argparse.Namespace) -> None:
     optimizer, scheduler = create_optimizer(model.parameters(), optim_config)
     optimizer_swa = SWA(optimizer)
 
+    # [ADD THIS LINE] Initialize Scaler
+    scaler = GradScaler()
+
     best_dev_eer = 1.
     best_eval_eer = 100.
     best_dev_tdcf = 0.05
@@ -130,7 +133,7 @@ def main(args: argparse.Namespace) -> None:
     for epoch in range(config["num_epochs"]):
         print("Start training epoch{:03d}".format(epoch))
         running_loss = train_epoch(trn_loader, model, optimizer, device,
-                                   scheduler, config)
+                                   scheduler, config, scaler)  # <--- Pass scaler
         produce_evaluation_file(dev_loader, model, device,
                                 metric_path/"dev_score.txt", dev_trial_path)
         dev_eer, dev_tdcf = calculate_tDCF_EER(
@@ -327,8 +330,9 @@ def train_epoch(
     optim: Union[torch.optim.SGD, torch.optim.Adam],
     device: torch.device,
     scheduler: torch.optim.lr_scheduler,
-    config: argparse.Namespace):
-    """Train the model for one epoch"""
+    config: argparse.Namespace,
+    scaler: GradScaler):  # <--- Added scaler argument
+
     running_loss = 0
     num_total = 0.0
     ii = 0
@@ -337,18 +341,26 @@ def train_epoch(
     # set objective (Loss) functions
     weight = torch.FloatTensor([0.1, 0.9]).to(device)
     criterion = nn.CrossEntropyLoss(weight=weight)
+    
     for batch_x, batch_y in trn_loader:
         batch_size = batch_x.size(0)
         num_total += batch_size
         ii += 1
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
-        batch_loss = criterion(batch_out, batch_y)
-        running_loss += batch_loss.item() * batch_size
+        
+        # --- MIXED PRECISION FORWARD PASS ---
+        with autocast():
+            _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
+            batch_loss = criterion(batch_out, batch_y)
+        
+        # --- MIXED PRECISION BACKWARD PASS ---
         optim.zero_grad()
-        batch_loss.backward()
-        optim.step()
+        scaler.scale(batch_loss).backward()  # Scale loss
+        scaler.step(optim)                   # Step optimizer
+        scaler.update()                      # Update scaler
+        
+        running_loss += batch_loss.item() * batch_size
 
         if config["optim_config"]["scheduler"] in ["cosine", "keras_decay"]:
             scheduler.step()
