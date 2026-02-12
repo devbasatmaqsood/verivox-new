@@ -1,5 +1,5 @@
 """
-AASIST (with MFM integrated into Residual blocks)
+AASIST
 Copyright (c) 2021-present NAVER Corp.
 MIT license
 """
@@ -12,37 +12,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-
-
-# File: models/AASIST.py
-
-class MFM(nn.Module):
-    """
-    Max-Feature-Map (MFM) activation.
-    Assumes channel dimension = 2 * out_channels and returns out_channels.
-    """
-    # FIX: Ensure 'out_channels' is an explicit positional argument
-    def __init__(self, out_channels: int):
-        super().__init__()
-        self.out_channels = out_channels
-
-    def forward(self, x: Tensor) -> Tensor:
-        # ... (Your previous fix for 4D/2D slicing should be here)
-        c = self.out_channels
-        
-        # Check the dimension of the input tensor
-        if len(x.shape) == 4:
-            # 4D input: Convolutional output (B, 2*C, H, W)
-            x1 = x[:, :c, :, :]
-            x2 = x[:, c:, :, :]
-        elif len(x.shape) == 2:
-            # 2D input: Linear output (B, 2*C)
-            x1 = x[:, :c]
-            x2 = x[:, c:]
-        else:
-            raise ValueError(f"MFM received input with {len(x.shape)} dimensions, expected 2 or 4.")
-            
-        return torch.max(x1, x2)
 
 
 class GraphAttentionLayer(nn.Module):
@@ -442,93 +411,59 @@ class CONV(nn.Module):
 
 
 class Residual_block(nn.Module):
-    """
-    Residual block modified to use MFM.
-
-    nb_filts is expected to be an iterable of two ints: [in_channels, out_channels]
-    External interface unchanged: nb_filts[0] = in, nb_filts[1] = out (C).
-    Internal conv shapes:
-      conv1: in -> 2*C
-      BN
-      MFM -> C
-      conv2: C -> 2*C
-      BN
-      MFM -> C
-    Identity (downsample) conv maps in -> C (so addition is done on C).
-    """
     def __init__(self, nb_filts, first=False):
         super().__init__()
         self.first = first
 
-        in_ch = nb_filts[0]
-        out_ch = nb_filts[1]  # this is C (the external expected out)
-
         if not self.first:
-            # BN on input (same as original)
-            self.bn1 = nn.BatchNorm2d(num_features=in_ch)
-
-        # conv1: in_ch -> 2*out_ch
-        self.conv1 = nn.Conv2d(in_channels=in_ch,
-                               out_channels=out_ch * 2,
+            self.bn1 = nn.BatchNorm2d(num_features=nb_filts[0])
+        self.conv1 = nn.Conv2d(in_channels=nb_filts[0],
+                               out_channels=nb_filts[1],
                                kernel_size=(2, 3),
                                padding=(1, 1),
                                stride=1)
+        self.selu = nn.SELU(inplace=True)
 
-        # BN after conv1 (on 2*C channels)
-        self.bn_after_conv1 = nn.BatchNorm2d(num_features=out_ch * 2)
-        # MFM reducing 2*C -> C
-        self.mfm1 = MFM(out_ch)
-
-        # conv2: C -> 2*C
-        self.conv2 = nn.Conv2d(in_channels=out_ch,
-                               out_channels=out_ch * 2,
+        self.bn2 = nn.BatchNorm2d(num_features=nb_filts[1])
+        self.conv2 = nn.Conv2d(in_channels=nb_filts[1],
+                               out_channels=nb_filts[1],
                                kernel_size=(2, 3),
                                padding=(0, 1),
                                stride=1)
 
-        # BN after conv2 (on 2*C channels)
-        self.bn_after_conv2 = nn.BatchNorm2d(num_features=out_ch * 2)
-        # MFM reducing 2*C -> C
-        self.mfm2 = MFM(out_ch)
-
-        if in_ch != out_ch:
+        if nb_filts[0] != nb_filts[1]:
             self.downsample = True
-            # conv_downsample will map identity to out_ch (C) to match out after MFM
-            self.conv_downsample = nn.Conv2d(in_channels=in_ch,
-                                             out_channels=out_ch,
+            self.conv_downsample = nn.Conv2d(in_channels=nb_filts[0],
+                                             out_channels=nb_filts[1],
                                              padding=(0, 1),
                                              kernel_size=(1, 3),
                                              stride=1)
+
         else:
             self.downsample = False
-
-        self.mp = nn.MaxPool2d((1, 3))  # same as original
+        self.mp = nn.MaxPool2d((1, 3))  # self.mp = nn.MaxPool2d((1,4))
 
     def forward(self, x):
         identity = x
-
         if not self.first:
             out = self.bn1(x)
+            out = self.selu(out)
         else:
             out = x
+        out = self.conv1(x)
 
-        # conv1 -> BN -> MFM
-        out = self.conv1(out)              # -> 2*C
-        out = self.bn_after_conv1(out)
-        out = self.mfm1(out)               # -> C
-
-        # conv2 -> BN -> MFM
-        out = self.conv2(out)              # expects C in -> outputs 2*C
-        out = self.bn_after_conv2(out)
-        out = self.mfm2(out)               # -> C
-
+        # print('out',out.shape)
+        out = self.bn2(out)
+        out = self.selu(out)
+        # print('out',out.shape)
+        out = self.conv2(out)
+        #print('conv2 out',out.shape)
         if self.downsample:
-            identity = self.conv_downsample(identity)  # -> C
+            identity = self.conv_downsample(identity)
 
-        out = out + identity
+        out += identity
         out = self.mp(out)
         return out
-
 
 class AttentiveStatsPool(nn.Module):
     def __init__(self, in_dim, bottleneck_dim=128):
@@ -555,6 +490,7 @@ class AttentiveStatsPool(nn.Module):
         # Concatenate mean and std
         return torch.cat([mean, std], dim=1)
 
+
 class Model(nn.Module):
     def __init__(self, d_args):
         super().__init__()
@@ -573,7 +509,7 @@ class Model(nn.Module):
         self.drop = nn.Dropout(0.5, inplace=True)
         self.drop_way = nn.Dropout(0.2, inplace=True)
         self.selu = nn.SELU(inplace=True)
-
+        
         self.encoder = nn.Sequential(
             nn.Sequential(Residual_block(nb_filts=filts[1], first=True)),
             nn.Sequential(Residual_block(nb_filts=filts[2])),
@@ -581,7 +517,6 @@ class Model(nn.Module):
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])),
             nn.Sequential(Residual_block(nb_filts=filts[4])))
-
         # [NEW CODE START] Initialize ASP and Projections
         self.asp_S = AttentiveStatsPool(filts[-1][-1], 128)
         self.proj_S_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
@@ -589,7 +524,6 @@ class Model(nn.Module):
         self.asp_T = AttentiveStatsPool(filts[-1][-1], 128)
         self.proj_T_asp = nn.Linear(filts[-1][-1] * 2, filts[-1][-1]) # Project 2*C -> C
         # [NEW CODE END]
-
         self.pos_S = nn.Parameter(torch.randn(1, 23, filts[-1][-1]))
         self.master1 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
         self.master2 = nn.Parameter(torch.randn(1, 1, gat_dims[0]))
@@ -621,44 +555,41 @@ class Model(nn.Module):
         self.pool_hT2 = GraphPool(pool_ratios[2], gat_dims[1], 0.3)
 
         # ---------------------------------------------------------------------
-        # MODIFICATION: 5 Dense Layers with MFM Activation
+        # MODIFICATION: Increased dense layers from 1 to 5
         # ---------------------------------------------------------------------
         
         # Calculate input dimension (5 concatenated features)
         in_dim = 5 * gat_dims[1]
         
-        # Define hidden dimension. 
-        # We keep it consistent with in_dim, but you can change this (e.g., 128)
+        # Define hidden dimension size. 
+        # You can keep it same as in_dim or set a fixed number (e.g., 128)
         hidden_dim = in_dim 
 
-        
         self.out_layer = nn.Sequential(
-            # --- Layer 1 ---
-            # Project to double size -> MFM reduces back to hidden_dim
-            nn.Linear(in_dim, hidden_dim * 2),
-            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
+            # Layer 1: Input -> Hidden
+            nn.Linear(in_dim, hidden_dim),
+            nn.SELU(inplace=True),
             nn.Dropout(0.3),
             
-            # --- Layer 2 ---
-            nn.Linear(hidden_dim, hidden_dim * 2),
-            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
+            # Layer 2: Hidden -> Hidden
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SELU(inplace=True),
             nn.Dropout(0.3),
             
-            # --- Layer 3 ---
-            nn.Linear(hidden_dim, hidden_dim * 2),
-            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
+            # Layer 3: Hidden -> Hidden
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SELU(inplace=True),
             nn.Dropout(0.3),
             
-            # --- Layer 4 ---
-            nn.Linear(hidden_dim, hidden_dim * 2),
-            MFM(hidden_dim), # <-- FIX: Pass hidden_dim
+            # Layer 4: Hidden -> Hidden
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SELU(inplace=True),
             nn.Dropout(0.3),
             
-            # --- Layer 5 (Output) ---
-            # Final projection to 2 classes (Bonafide vs Spoof)
-            # No MFM needed here as this output goes to Loss Function (CCE)
+            # Layer 5: Hidden -> Output (2 classes)
             nn.Linear(hidden_dim, 2)
         )
+        # ---------------------------------------------------------------------
 
     def forward(self, x, Freq_aug=False):
 
@@ -702,9 +633,6 @@ class Model(nn.Module):
 
         # [MISSING PART ADDED BELOW]
         # Apply GAT and Graph Pooling for Temporal branch
-        gat_T = self.GAT_layer_T(e_T)
-        out_T = self.pool_T(gat_T)
-
         gat_T = self.GAT_layer_T(e_T)
         out_T = self.pool_T(gat_T)
 

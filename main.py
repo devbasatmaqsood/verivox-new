@@ -11,13 +11,6 @@ import json
 import os
 import sys
 import warnings
-
-# Paste the fix here:
-warnings.filterwarnings("ignore", message=".*torchaudio.*", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*StreamingMediaDecoder.*", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*In 2.9, this function.*", category=UserWarning)
-
-
 from importlib import import_module
 from pathlib import Path
 from shutil import copy
@@ -28,7 +21,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchcontrib.optim import SWA
-from torch.cuda.amp import GradScaler, autocast
 
 from data_utils import (Dataset_ASVspoof2019_train,
                         Dataset_ASVspoof2019_devNeval, genSpoof_list)
@@ -122,9 +114,6 @@ def main(args: argparse.Namespace) -> None:
     optimizer, scheduler = create_optimizer(model.parameters(), optim_config)
     optimizer_swa = SWA(optimizer)
 
-    # [ADD THIS LINE] Initialize Scaler
-    scaler = GradScaler()
-
     best_dev_eer = 1.
     best_eval_eer = 100.
     best_dev_tdcf = 0.05
@@ -141,7 +130,7 @@ def main(args: argparse.Namespace) -> None:
     for epoch in range(config["num_epochs"]):
         print("Start training epoch{:03d}".format(epoch))
         running_loss = train_epoch(trn_loader, model, optimizer, device,
-                                   scheduler, config, scaler)  # <--- Pass scaler
+                                   scheduler, config)
         produce_evaluation_file(dev_loader, model, device,
                                 metric_path/"dev_score.txt", dev_trial_path)
         dev_eer, dev_tdcf = calculate_tDCF_EER(
@@ -270,8 +259,7 @@ def get_loader(
                             drop_last=True,
                             pin_memory=True,
                             worker_init_fn=seed_worker,
-                            generator=gen,
-                            num_workers=4)
+                            generator=gen)
 
     _, file_dev = genSpoof_list(dir_meta=dev_trial_path,
                                 is_train=False,
@@ -284,8 +272,7 @@ def get_loader(
                             batch_size=config["batch_size"],
                             shuffle=False,
                             drop_last=False,
-                            pin_memory=True,
-                            num_workers=4)
+                            pin_memory=True)
 
     file_eval = genSpoof_list(dir_meta=eval_trial_path,
                               is_train=False,
@@ -296,8 +283,7 @@ def get_loader(
                              batch_size=config["batch_size"],
                              shuffle=False,
                              drop_last=False,
-                             pin_memory=True,
-                             num_workers=4)
+                             pin_memory=True)
 
     return trn_loader, dev_loader, eval_loader
 
@@ -338,9 +324,8 @@ def train_epoch(
     optim: Union[torch.optim.SGD, torch.optim.Adam],
     device: torch.device,
     scheduler: torch.optim.lr_scheduler,
-    config: argparse.Namespace,
-    scaler: GradScaler):  # <--- Added scaler argument
-
+    config: argparse.Namespace):
+    """Train the model for one epoch"""
     running_loss = 0
     num_total = 0.0
     ii = 0
@@ -349,26 +334,18 @@ def train_epoch(
     # set objective (Loss) functions
     weight = torch.FloatTensor([0.1, 0.9]).to(device)
     criterion = nn.CrossEntropyLoss(weight=weight)
-    
     for batch_x, batch_y in trn_loader:
         batch_size = batch_x.size(0)
         num_total += batch_size
         ii += 1
         batch_x = batch_x.to(device)
         batch_y = batch_y.view(-1).type(torch.int64).to(device)
-        
-        # --- MIXED PRECISION FORWARD PASS ---
-        with autocast():
-            _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
-            batch_loss = criterion(batch_out, batch_y)
-        
-        # --- MIXED PRECISION BACKWARD PASS ---
-        optim.zero_grad()
-        scaler.scale(batch_loss).backward()  # Scale loss
-        scaler.step(optim)                   # Step optimizer
-        scaler.update()                      # Update scaler
-        
+        _, batch_out = model(batch_x, Freq_aug=str_to_bool(config["freq_aug"]))
+        batch_loss = criterion(batch_out, batch_y)
         running_loss += batch_loss.item() * batch_size
+        optim.zero_grad()
+        batch_loss.backward()
+        optim.step()
 
         if config["optim_config"]["scheduler"] in ["cosine", "keras_decay"]:
             scheduler.step()
